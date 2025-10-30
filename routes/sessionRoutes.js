@@ -130,7 +130,7 @@ router.get("/:token", async (req, res) => {
 });
 
 /* ----------------------------------------------------
-   ✅ FIXED — TEACHER creates new QR session (10 min)
+   ✅ TEACHER creates new QR session (10 min)
 ---------------------------------------------------- */
 router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) => {
   try {
@@ -146,7 +146,6 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       { expiresAt: new Date(), status: "expired" }
     );
 
-    // create main session
     const token = uuidv4();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     const session = new Session({
@@ -157,31 +156,16 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       status: "active",
       validTokens: [],
     });
-
-    // ✅ generate first rotating QR sub-token
-    const firstToken = crypto.randomBytes(12).toString("hex");
-    session.validTokens.push({
-      token: firstToken,
-      expiresAt: new Date(Date.now() + 10 * 1000),
-    });
-
     await session.save();
 
-    // ✅ generate QR using valid sub-token
-    const qrData = `${process.env.FRONTEND_URL}/student/scan/${firstToken}`;
+    const qrData = `${process.env.FRONTEND_URL}/student/scan/${token}`;
     const qrImage = await QRCode.toDataURL(qrData);
 
     // Auto-end session after 10 min
     const delay = expiresAt.getTime() - Date.now();
     setTimeout(() => endSessionAndMarkAbsentees(session._id), delay);
 
-    res.json({
-      msg: "Session created",
-      token: firstToken,
-      qrImage,
-      expiresAt,
-      sessionId: session._id,
-    });
+    res.json({ msg: "Session created", token, qrImage, expiresAt, sessionId: session._id });
   } catch (err) {
     console.error("POST /:courseId/create error:", err.message);
     res.status(500).json({ msg: "Server error", error: err.message });
@@ -257,6 +241,7 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
     res.status(500).json({ msg: "Server error", error: err.message });
   }
 });
+
 
 /* ----------------------------------------------------
    ✅ TEACHER manually ends session (marks absentees)
