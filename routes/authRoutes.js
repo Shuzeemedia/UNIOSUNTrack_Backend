@@ -28,7 +28,9 @@ router.post("/signup", async (req, res) => {
                 msg: "Password must be at least 8 chars, include uppercase, lowercase, and number",
             });
         if (!studentIdRegex.test(studentId))
-            return res.status(400).json({ msg: "Student ID must follow e.g. 2022/42047" });
+            return res
+                .status(400)
+                .json({ msg: "Student ID must follow e.g. 2022/42047" });
 
         const existingUser = await User.findOne({ $or: [{ email }, { studentId }] });
         if (existingUser)
@@ -37,7 +39,9 @@ router.post("/signup", async (req, res) => {
         const dept = await Department.findById(departmentId);
         if (!dept) return res.status(400).json({ msg: "Invalid department" });
         if (!dept.levels.includes(level))
-            return res.status(400).json({ msg: `Level ${level} is not valid for ${dept.name}` });
+            return res
+                .status(400)
+                .json({ msg: `Level ${level} is not valid for ${dept.name}` });
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const verificationToken = crypto.randomBytes(32).toString("hex");
@@ -55,7 +59,9 @@ router.post("/signup", async (req, res) => {
 
         await newUser.save();
 
+        // Send verification email
         const verifyUrl = `${process.env.BACKEND_URL}/api/auth/verify-email/${verificationToken}`;
+
         await sendVerificationEmail(email, name, verifyUrl);
 
         res.json({ msg: "Signup successful! Please verify your email." });
@@ -71,12 +77,15 @@ router.post("/signup", async (req, res) => {
 router.get("/verify-email/:token", async (req, res) => {
     try {
         const user = await User.findOne({ verificationToken: req.params.token });
-        if (!user) return res.status(400).send("Invalid or expired verification token");
+        if (!user) {
+            return res.status(400).send("Invalid or expired verification token");
+        }
 
         user.isVerified = true;
         user.verificationToken = undefined;
         await user.save();
 
+        // Redirect to login page on frontend
         return res.redirect(`${process.env.FRONTEND_URL}/login`);
     } catch (err) {
         console.error(err);
@@ -84,47 +93,49 @@ router.get("/verify-email/:token", async (req, res) => {
     }
 });
 
+
 // ======================
-// 🔐 Login with HttpOnly cookie
+// 🔐 Login (all users)
 // ======================
 router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
 
         const user = await User.findOne({ email })
-            .populate("department", "name levels")
+            .populate("department", "name levels") // ✅ fixed populate
             .select("-__v");
 
         if (!user) return res.status(400).json({ msg: "Invalid email or password" });
+
         if (!user.isVerified)
             return res.status(403).json({ msg: "Please verify your email before logging in." });
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: "Invalid email or password" });
 
-        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
+            expiresIn: "1d", // ⏱ For test — change to "1d" later
+        });
 
-        res
-            .cookie("token", token, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === "production",
-                sameSite: "Strict",
-                maxAge: 24 * 60 * 60 * 1000, // 1 day
-            })
-            .json({
-                user: {
-                    id: user._id,
-                    name: user.name,
-                    email: user.email,
-                    role: user.role,
-                    studentId: user.studentId,
-                    department: user.department
-                        ? { id: user.department._id, name: user.department.name, levels: user.department.levels }
-                        : null,
-                    level: user.level,
-                    profileImage: user.profileImage || null,
-                },
-            });
+        res.json({
+            token,
+            user: {
+                id: user._id,
+                name: user.name,
+                email: user.email,
+                role: user.role,
+                studentId: user.studentId,
+                department: user.department
+                    ? {
+                        id: user.department._id,
+                        name: user.department.name,
+                        levels: user.department.levels,
+                    }
+                    : null,
+                level: user.level,
+                profileImage: user.profileImage || null,
+            },
+        });
     } catch (err) {
         console.error(err);
         res.status(500).json({ error: err.message });
@@ -142,7 +153,7 @@ router.post("/forgot-password", async (req, res) => {
 
         const resetToken = crypto.randomBytes(32).toString("hex");
         user.resetPasswordToken = resetToken;
-        user.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
+        user.resetPasswordExpires = Date.now() + 30 * 60 * 1000; // 30 minutes
         await user.save();
 
         const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
@@ -165,7 +176,9 @@ router.post("/reset-password/:token", async (req, res) => {
             resetPasswordToken: req.params.token,
             resetPasswordExpires: { $gt: Date.now() },
         });
-        if (!user) return res.status(400).json({ msg: "Invalid or expired reset token" });
+
+        if (!user)
+            return res.status(400).json({ msg: "Invalid or expired reset token" });
 
         const hashedPassword = await bcrypt.hash(password, 10);
         user.password = hashedPassword;
@@ -184,13 +197,11 @@ router.post("/reset-password/:token", async (req, res) => {
 // ======================
 router.get("/me", auth, async (req, res) => {
     try {
-        if (!req.user) return res.status(200).json({ user: null });
-
         const user = await User.findById(req.user.id)
-            .populate("department", "name levels")
+            .populate("department", "name levels") // ✅ fixed populate
             .select("-password -__v");
 
-        if (!user) return res.status(200).json({ user: null });
+        if (!user) return res.status(404).json({ msg: "User not found" });
 
         res.json({
             user: {
@@ -200,15 +211,18 @@ router.get("/me", auth, async (req, res) => {
                 role: user.role,
                 studentId: user.studentId,
                 department: user.department
-                    ? { id: user.department._id, name: user.department.name, levels: user.department.levels }
+                    ? {
+                        id: user.department._id,
+                        name: user.department.name,
+                        levels: user.department.levels,
+                    }
                     : null,
                 level: user.level,
                 profileImage: user.profileImage || null,
             },
         });
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ user: null, error: err.message });
+        res.status(500).json({ error: err.message });
     }
 });
 
@@ -221,20 +235,6 @@ router.get("/admin-only", auth, roleCheck(["admin"]), (req, res) => {
 
 router.get("/teacher-only", auth, roleCheck(["teacher"]), (req, res) => {
     res.json({ msg: "Welcome Teacher!" });
-});
-
-// ======================
-// 🔒 Logout
-// ======================
-router.post("/logout", (req, res) => {
-    res
-        .cookie("token", "", {
-            httpOnly: true,
-            secure: process.env.NODE_ENV === "production",
-            sameSite: "Strict",
-            expires: new Date(0),
-        })
-        .json({ msg: "Logged out successfully" });
 });
 
 module.exports = router;

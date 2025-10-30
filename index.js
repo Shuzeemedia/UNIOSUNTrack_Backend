@@ -2,7 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
-const cookieParser = require("cookie-parser");
+// const cookieParser = require("cookie-parser");
 
 
 
@@ -43,7 +43,7 @@ const corsOptions = {
   credentials: true,
 };
 
-app.use(cookieParser());
+// app.use(cookieParser());
 app.use(cors(corsOptions));
 app.use(express.json());
 
