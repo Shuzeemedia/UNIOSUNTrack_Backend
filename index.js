@@ -2,6 +2,9 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const dotenv = require("dotenv");
+const cookieParser = require("cookie-parser");
+
+
 
 // Route imports
 const authRoutes = require("./routes/authRoutes");
@@ -23,7 +26,6 @@ console.log(
 
 // Initialize app
 const app = express();
-
 // Middleware: CORS for local & live deployments
 const allowedOrigins = [process.env.FRONTEND_URL];
 if (process.env.NODE_ENV !== "production") {
@@ -41,6 +43,7 @@ const corsOptions = {
   credentials: true,
 };
 
+app.use(cookieParser());
 app.use(cors(corsOptions));
 app.use(express.json());
 
@@ -61,7 +64,7 @@ app.use("/api/leaderboard", require("./routes/leaderboardRoutes"));
 
 // Error-handling middleware
 app.use((err, req, res, next) => {
-  console.error("🔥 Error middleware:", err.message || err);
+  console.error("Error middleware:", err.message || err);
   res.status(500).json({ msg: "Server error", error: err.message || err });
 });
 
@@ -74,7 +77,7 @@ mongoose
     useUnifiedTopology: true,
   })
   .then(() => {
-    console.log("✅ MongoDB Connected");
-    app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
+    console.log("MongoDB Connected");
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
   })
-  .catch((err) => console.error("❌ DB Connection Error:", err));
+  .catch((err) => console.error("DB Connection Error:", err));
