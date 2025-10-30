@@ -198,42 +198,57 @@ router.post("/:sessionId/refresh", auth, roleCheck(["teacher"]), async (req, res
   }
 });
 
-/* ----------------------------------------------------
-   ✅ STUDENT scans QR (only latest token valid)
----------------------------------------------------- */
 router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
   try {
     const { token } = req.params;
+    const userId = req.user.id;
 
-    // Only look for the session whose **latest sub-token** matches
+    // Find active session by either original or rotated token
     const session = await Session.findOne({
-      "validTokens.token": token,
       status: "active",
-    });
+      $or: [
+        { token: token },                // original token
+        { "validTokens.token": token }   // rotated token
+      ]
+    }).populate("course");
 
     if (!session) return res.status(404).json({ msg: "Invalid or expired QR" });
-    if (new Date() > new Date(session.expiresAt))
+
+    if (new Date() > new Date(session.expiresAt)) {
       return res.status(400).json({ msg: "Session expired" });
+    }
 
-    const latestTokenObj = session.validTokens[0];
-    if (!latestTokenObj || latestTokenObj.token !== token)
-      return res.status(400).json({ msg: "This QR is no longer valid" });
+    // Check student enrollment
+    const course = await Course.findById(session.course._id).populate("students", "_id");
+    const isEnrolled = course.students.some((s) => s._id.toString() === userId);
+    if (!isEnrolled) {
+      return res.status(400).json({ msg: "You are not enrolled in this course" });
+    }
 
+    // Prevent duplicates
     const alreadyMarked = await Attendance.findOne({
-      course: session.course,
-      student: req.user.id,
+      course: session.course._id,
+      student: userId,
       session: session._id,
     });
-    if (alreadyMarked)
-      return res.status(400).json({ msg: "Attendance already marked" });
+    if (alreadyMarked) return res.status(400).json({ msg: "Attendance already marked" });
 
+    // Record attendance
     const attendance = new Attendance({
-      course: session.course,
-      student: req.user.id,
+      course: session.course._id,
+      student: userId,
       session: session._id,
       status: "Present",
+      date: new Date(),
     });
     await attendance.save();
+
+    // Rotate the QR token automatically if this was the original token
+    if (session.token === token) {
+      const newToken = crypto.randomBytes(12).toString("hex");
+      session.validTokens = [{ token: newToken, expiresAt: new Date(Date.now() + 10 * 1000) }];
+      await session.save();
+    }
 
     res.json({ msg: "Attendance recorded", attendance });
   } catch (err) {
