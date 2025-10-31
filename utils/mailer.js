@@ -1,28 +1,8 @@
 // utils/mailer.js
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
+const resend = new Resend(process.env.RESEND_API_KEY);
 
-const transporter = nodemailer.createTransport({
-  service: "gmail",
-  auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
-});
-
-const sendMail = async (to, subject, html) => {
-  try {
-    const info = await transporter.sendMail({
-      from: `"UNIOSUNTrack" <${process.env.EMAIL_USER}>`,
-      to,
-      subject,
-      html,
-    });
-    console.log("Mail sent:", info.response);
-    return true;
-  } catch (err) {
-    console.error("Mail error:", err);
-    throw new Error("Email could not be sent");
-  }
-};
-
-// Base template
+// Base HTML template
 const baseTemplate = (title, content, buttonText, buttonLink, buttonColor) => `
 <html>
 <head>
@@ -50,7 +30,25 @@ ${buttonText && buttonLink ? `<a href="${buttonLink}" class="btn">${buttonText}<
 </html>
 `;
 
-// ======================= EMAIL TYPES =======================
+// Generic Resend sender
+const sendMail = async (to, subject, html) => {
+  try {
+    await resend.emails.send({
+      from: "UNIOSUNTrack <support@uniosuntrack.site>",
+      to,
+      subject,
+      html,
+    });
+    
+    console.log("✅ Mail sent to:", to);
+    return true;
+  } catch (err) {
+    console.error("❌ Mail error:", err);
+    throw err;
+  }
+};
+
+// ====== Specific Templates ======
 const sendVerificationEmail = (email, username, link) => {
   const content = `<p>Hi <strong>${username}</strong>,</p><p>Thanks for joining <b>UNIOSUNTrack</b>! Please verify your email address to get started.</p>`;
   return sendMail(email, "Verify Your Email", baseTemplate("Verify Your Email", content, "Verify Email", link, "#0B6623"));
@@ -62,12 +60,7 @@ const sendResetPasswordEmail = (email, username, link) => {
 };
 
 const sendTeacherCredentialsEmail = (email, username, password) => {
-  const content = `
-    <p>Hi <strong>${username}</strong>,</p>
-    <p>Your teacher account on <b>UNIOSUNTrack</b> has been created. You can now log in with the following credentials:</p>
-    <ul><li><b>Email:</b> ${email}</li><li><b>Password:</b> ${password}</li></ul>
-    <p>Please change your password immediately after your first login for security reasons.</p>
-    `;
+  const content = `<p>Hi <strong>${username}</strong>,</p><p>Your teacher account on <b>UNIOSUNTrack</b> has been created. You can now log in with the following credentials:</p><ul><li><b>Email:</b> ${email}</li><li><b>Password:</b> ${password}</li></ul><p>Please change your password immediately after your first login for security reasons.</p>`;
   return sendMail(email, "Your Teacher Account Credentials", baseTemplate("Your Teacher Account Credentials", content, "Login Now", `${process.env.FRONTEND_URL}/login`, "#22c55e"));
 };
 

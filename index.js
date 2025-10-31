@@ -1,7 +1,9 @@
+const dotenv = require("dotenv");
+dotenv.config();
+
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
-const dotenv = require("dotenv");
 
 // Route imports
 const authRoutes = require("./routes/authRoutes");
@@ -13,11 +15,7 @@ const departmentRoutes = require("./routes/departmentRoutes");
 const profileRoutes = require("./routes/profile");
 
 
-
-
 // Load environment variables
-dotenv.config();
-
 console.log("🧩 ENV TEST:", process.env.EMAIL_USER, process.env.EMAIL_PASS ? "PASS_FOUND" : "NO_PASS");
 
 

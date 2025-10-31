@@ -1,4 +1,3 @@
-// routes/auth.js
 const express = require("express");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -6,9 +5,25 @@ const crypto = require("crypto");
 const User = require("../models/User");
 const Department = require("../models/Department");
 const { auth, roleCheck } = require("../middleware/authMiddleware");
-const { sendVerificationEmail, sendResetPasswordEmail, sendTeacherCredentialsEmail } = require("../utils/mailer");
+const { Resend } = require("resend"); // ✅ Using Resend globally
 
+const resend = new Resend(process.env.RESEND_API_KEY);
 const router = express.Router();
+
+// Helper function for sending emails via Resend
+async function sendEmail(to, subject, html) {
+    try {
+        await resend.emails.send({
+            from: "UniosunTrack <no-reply@yourdomain.com>", // change this to your verified sender
+            to,
+            subject,
+            html,
+        });
+    } catch (error) {
+        console.error("Email send error:", error);
+        throw new Error("Email sending failed");
+    }
+}
 
 // ======================
 // 🧍 Student Signup
@@ -16,8 +31,6 @@ const router = express.Router();
 router.post("/signup", async (req, res) => {
     try {
         const { name, studentId, email, password, departmentId, level } = req.body;
-
-        // ---------- VALIDATION ----------
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         const passwordRegex = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{8,}$/;
         const studentIdRegex = /^\d{4}\/\d{5}$/;
@@ -38,7 +51,9 @@ router.post("/signup", async (req, res) => {
         const dept = await Department.findById(departmentId);
         if (!dept) return res.status(400).json({ msg: "Invalid department" });
         if (!dept.levels.includes(level))
-            return res.status(400).json({ msg: `Level ${level} is not valid for ${dept.name}` });
+            return res.status(400).json({
+                msg: `Level ${level} is not valid for ${dept.name}`,
+            });
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const verificationToken = crypto.randomBytes(32).toString("hex");
@@ -56,13 +71,22 @@ router.post("/signup", async (req, res) => {
 
         await newUser.save();
 
-        // Send verification email (use FRONTEND_URL for redirect)
         const verifyUrl = `${process.env.FRONTEND_URL}/verify-email/${verificationToken}`;
-        await sendVerificationEmail(email, name, verifyUrl);
+        const html = `
+      <div style="font-family:Arial,sans-serif;line-height:1.6;">
+        <h2>Welcome to UniosunTrack 🎓</h2>
+        <p>Hello ${name},</p>
+        <p>Click the button below to verify your email and activate your account:</p>
+        <a href="${verifyUrl}" style="display:inline-block;padding:10px 15px;background:#4caf50;color:#fff;text-decoration:none;border-radius:5px;">Verify Email</a>
+        <p>If you didn’t create an account, you can ignore this email.</p>
+      </div>
+    `;
+
+        await sendEmail(email, "Verify your UniosunTrack account", html);
 
         res.json({ msg: "Signup successful! Please verify your email." });
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/signup:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -79,29 +103,33 @@ router.get("/verify-email/:token", async (req, res) => {
         user.verificationToken = undefined;
         await user.save();
 
-        // Redirect to frontend login page
         return res.redirect(`${process.env.FRONTEND_URL}/login`);
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/verify-email:", err);
         return res.status(500).send("Server error");
     }
 });
 
 // ======================
-// 🔐 Login (all users)
+// 🔐 Login
 // ======================
 router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
-        const user = await User.findOne({ email }).populate("department", "name levels").select("-__v");
+        const user = await User.findOne({ email })
+            .populate("department", "name levels")
+            .select("-__v");
 
         if (!user) return res.status(400).json({ msg: "Invalid email or password" });
-        if (!user.isVerified) return res.status(403).json({ msg: "Please verify your email before logging in." });
+        if (!user.isVerified)
+            return res.status(403).json({ msg: "Please verify your email before logging in." });
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) return res.status(400).json({ msg: "Invalid email or password" });
 
-        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: "1d" });
+        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
+            expiresIn: "1d",
+        });
 
         res.json({
             token,
@@ -111,36 +139,54 @@ router.post("/login", async (req, res) => {
                 email: user.email,
                 role: user.role,
                 studentId: user.studentId,
-                department: user.department ? { id: user.department._id, name: user.department.name, levels: user.department.levels } : null,
+                department: user.department
+                    ? {
+                        id: user.department._id,
+                        name: user.department.name,
+                        levels: user.department.levels,
+                    }
+                    : null,
                 level: user.level,
                 profileImage: user.profileImage || null,
             },
         });
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/login:", err);
         res.status(500).json({ error: err.message });
     }
 });
 
 // ======================
-// 🧩 Forgot Password
+// 🧩 Forgot Password (Resend)
 // ======================
 router.post("/forgot-password", async (req, res) => {
     try {
         const { email } = req.body;
+        if (!email) return res.status(400).json({ msg: "Email is required" });
+
         const user = await User.findOne({ email });
         if (!user) return res.status(400).json({ msg: "No account found with that email." });
 
         const resetToken = crypto.randomBytes(32).toString("hex");
         user.resetPasswordToken = resetToken;
-        user.resetPasswordExpires = Date.now() + 30 * 60 * 1000; // 30 mins
+        user.resetPasswordExpires = Date.now() + 30 * 60 * 1000;
         await user.save();
 
-        await sendResetPasswordEmail(email, user.name, resetToken);
+        const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+        const html = `
+      <div style="font-family:Arial,sans-serif;line-height:1.6;">
+        <h2>Password Reset Request</h2>
+        <p>Hello ${user.name || "User"},</p>
+        <p>You requested to reset your password. Click below to proceed:</p>
+        <a href="${resetUrl}" style="display:inline-block;padding:10px 15px;background:#4caf50;color:#fff;text-decoration:none;border-radius:5px;">Reset Password</a>
+        <p>This link expires in 30 minutes.</p>
+      </div>
+    `;
 
+        await sendEmail(email, "Password Reset Request", html);
         res.json({ msg: "Password reset email sent!" });
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/forgot-password:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -151,6 +197,7 @@ router.post("/forgot-password", async (req, res) => {
 router.post("/reset-password/:token", async (req, res) => {
     try {
         const { password } = req.body;
+        if (!password) return res.status(400).json({ msg: "Password is required" });
 
         const user = await User.findOne({
             resetPasswordToken: req.params.token,
@@ -166,7 +213,7 @@ router.post("/reset-password/:token", async (req, res) => {
 
         res.json({ msg: "Password reset successful! You can now log in." });
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/reset-password:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -176,7 +223,9 @@ router.post("/reset-password/:token", async (req, res) => {
 // ======================
 router.get("/me", auth, async (req, res) => {
     try {
-        const user = await User.findById(req.user.id).populate("department", "name levels").select("-password -__v");
+        const user = await User.findById(req.user.id)
+            .populate("department", "name levels")
+            .select("-password -__v");
         if (!user) return res.status(404).json({ msg: "User not found" });
 
         res.json({
@@ -186,13 +235,19 @@ router.get("/me", auth, async (req, res) => {
                 email: user.email,
                 role: user.role,
                 studentId: user.studentId,
-                department: user.department ? { id: user.department._id, name: user.department.name, levels: user.department.levels } : null,
+                department: user.department
+                    ? {
+                        id: user.department._id,
+                        name: user.department.name,
+                        levels: user.department.levels,
+                    }
+                    : null,
                 level: user.level,
                 profileImage: user.profileImage || null,
             },
         });
     } catch (err) {
-        console.error(err);
+        console.error("ERROR /auth/me:", err);
         res.status(500).json({ error: err.message });
     }
 });
@@ -200,7 +255,11 @@ router.get("/me", auth, async (req, res) => {
 // ======================
 // 🔒 Role-based test routes
 // ======================
-router.get("/admin-only", auth, roleCheck(["admin"]), (req, res) => res.json({ msg: "Welcome Admin!" }));
-router.get("/teacher-only", auth, roleCheck(["teacher"]), (req, res) => res.json({ msg: "Welcome Teacher!" }));
+router.get("/admin-only", auth, roleCheck(["admin"]), (req, res) =>
+    res.json({ msg: "Welcome Admin!" })
+);
+router.get("/teacher-only", auth, roleCheck(["teacher"]), (req, res) =>
+    res.json({ msg: "Welcome Teacher!" })
+);
 
 module.exports = router;
