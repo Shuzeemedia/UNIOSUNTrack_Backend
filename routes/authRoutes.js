@@ -14,7 +14,7 @@ const router = express.Router();
 async function sendEmail(to, subject, html) {
     try {
         await resend.emails.send({
-            from: "UniosunTrack <no-reply@yourdomain.com>", // change this to your verified sender
+            from: "UNIOSUNTrack <Onboarding@uniosuntrack.site>",
             to,
             subject,
             html,

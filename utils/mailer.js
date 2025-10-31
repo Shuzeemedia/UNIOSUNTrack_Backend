@@ -40,10 +40,10 @@ const sendMail = async (to, subject, html) => {
       html,
     });
     
-    console.log("✅ Mail sent to:", to);
+    console.log("Mail sent to:", to);
     return true;
   } catch (err) {
-    console.error("❌ Mail error:", err);
+    console.error("Mail error:", err);
     throw err;
   }
 };
