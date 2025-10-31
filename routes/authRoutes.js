@@ -97,18 +97,20 @@ router.post("/signup", async (req, res) => {
 router.get("/verify-email/:token", async (req, res) => {
     try {
         const user = await User.findOne({ verificationToken: req.params.token });
-        if (!user) return res.status(400).send("Invalid or expired verification token");
+        if (!user)
+            return res.status(400).json({ success: false, msg: "Invalid or expired verification link. Please sign up again." });
 
         user.isVerified = true;
         user.verificationToken = undefined;
         await user.save();
 
-        return res.redirect(`${process.env.FRONTEND_URL}/login`);
+        return res.json({ success: true, msg: "Email verified successfully" });
     } catch (err) {
         console.error("ERROR /auth/verify-email:", err);
-        return res.status(500).send("Server error");
+        return res.status(500).json({ success: false, msg: "Server error" });
     }
 });
+
 
 // ======================
 // 🔐 Login
