@@ -34,7 +34,7 @@ ${buttonText && buttonLink ? `<a href="${buttonLink}" class="btn">${buttonText}<
 const sendMail = async (to, subject, html) => {
   try {
     await resend.emails.send({
-      from: "UNIOSUNTrack <support@uniosuntrack.site>",
+      from: "UNIOSUNTrack <Onboarding@uniosuntrack.site>",
       to,
       subject,
       html,
