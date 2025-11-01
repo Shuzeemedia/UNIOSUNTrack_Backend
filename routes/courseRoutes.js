@@ -135,22 +135,27 @@ router.get("/enrolled", auth, roleCheck(["student"]), async (req, res) => {
             .populate("department", "name")
             .populate("teacher", "name email");
 
-        if (!courses.length)
-            return res.status(403).json({ msg: "Not enrolled in any course" });
+        // ✅ Return 200 with empty array instead of 403
+        if (!courses.length) {
+            return res.json([]); // empty list, not an error
+        }
 
-        res.json(courses.map(c => ({
-            _id: c._id,
-            name: c.name,
-            code: c.code,
-            level: c.level,
-            department: c.department,
-            teacher: c.teacher
-        })));
+        res.json(
+            courses.map((c) => ({
+                _id: c._id,
+                name: c.name,
+                code: c.code,
+                level: c.level,
+                department: c.department,
+                teacher: c.teacher,
+            }))
+        );
     } catch (err) {
         console.error("Error fetching enrolled courses:", err.message);
         res.status(500).json({ msg: "Server error" });
     }
 });
+
 
 
 /// ======================= LECTURER ASSIGNED COURSES (for leaderboard dropdown) ======================= ///
@@ -160,8 +165,9 @@ router.get("/assigned", auth, roleCheck(["teacher"]), async (req, res) => {
             .populate("department", "name")
             .populate("students", "name email level department");
 
-        if (!courses.length)
-            return res.status(403).json({ msg: "No assigned courses" });
+        if (!courses.length) {
+            return res.json([]); // safe empty response
+        }
 
         // Build unique dept & level lists
         const deptMap = new Map(); // deptId => { _id, name, levels: Set }
