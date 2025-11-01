@@ -99,27 +99,6 @@ router.post("/:courseId/register", auth, roleCheck(["student"]), async (req, res
 });
 
 
-/// ======================= TEACHER VIEW STUDENTS ======================= ///
-router.get("/:courseId/students", auth, roleCheck(["teacher"]), async (req, res) => {
-    try {
-        const course = await Course.findById(req.params.courseId)
-            .populate("students", "name email department level studentId") // ✅ Added studentId
-            .populate("department", "name levels")
-            .populate("teacher", "name email");
-
-        if (!course) return res.status(404).json({ msg: "Course not found" });
-
-        if (course.teacher._id.toString() !== req.user.id) {
-            return res.status(403).json({ msg: "Not authorized" });
-        }
-
-        res.json({ students: formatCourse(course, true).students });
-    } catch (err) {
-        res.status(500).json({ msg: "Server error", error: err.message });
-    }
-});
-
-
 /// ======================= TEACHER'S COURSES ======================= ///
 router.get("/my-courses", auth, roleCheck(["teacher"]), async (req, res) => {
     try {
@@ -149,6 +128,145 @@ router.get("/my-courses/student", auth, roleCheck(["student"]), async (req, res)
 });
 
 
+/// ======================= STUDENT ENROLLED COURSES (for leaderboard dropdown) ======================= ///
+router.get("/enrolled", auth, roleCheck(["student"]), async (req, res) => {
+    try {
+        const courses = await Course.find({ students: req.user._id })
+            .populate("department", "name")
+            .populate("teacher", "name email");
+
+        if (!courses.length)
+            return res.status(403).json({ msg: "Not enrolled in any course" });
+
+        res.json(courses.map(c => ({
+            _id: c._id,
+            name: c.name,
+            code: c.code,
+            level: c.level,
+            department: c.department,
+            teacher: c.teacher
+        })));
+    } catch (err) {
+        console.error("Error fetching enrolled courses:", err.message);
+        res.status(500).json({ msg: "Server error" });
+    }
+});
+
+
+/// ======================= LECTURER ASSIGNED COURSES (for leaderboard dropdown) ======================= ///
+router.get("/assigned", auth, roleCheck(["teacher"]), async (req, res) => {
+    try {
+        const courses = await Course.find({ teacher: req.user._id })
+            .populate("department", "name")
+            .populate("students", "name email level department");
+
+        if (!courses.length)
+            return res.status(403).json({ msg: "No assigned courses" });
+
+        // Build unique dept & level lists
+        const deptMap = new Map(); // deptId => { _id, name, levels: Set }
+        courses.forEach(course => {
+            const deptId = course.department._id.toString();
+            if (!deptMap.has(deptId)) {
+                deptMap.set(deptId, { _id: deptId, name: course.department.name, levels: new Set() });
+            }
+            deptMap.get(deptId).levels.add(course.level);
+        });
+
+        const departments = Array.from(deptMap.values()).map(d => ({
+            _id: d._id,
+            name: d.name,
+            levels: Array.from(d.levels).sort((a, b) => a - b)
+        }));
+
+        res.json({
+            courses: courses.map(c => ({
+                _id: c._id,
+                name: c.name,
+                code: c.code,
+                level: c.level,
+                department: c.department,
+                enrolledCount: c.students.length
+            })),
+            departments
+        });
+
+    } catch (err) {
+        console.error("Error fetching assigned courses:", err.message);
+        res.status(500).json({ msg: "Server error" });
+    }
+
+
+});
+
+
+/// ======================= ADMIN FILTER COURSES ======================= ///
+router.get("/admin-filter", auth, roleCheck(["admin"]), async (req, res) => {
+    try {
+        const courses = await Course.find()
+            .populate("teacher", "name email")
+            .populate("department", "name levels")
+            .populate("students", "name email level department");
+
+        if (!courses.length) return res.status(404).json({ msg: "No courses found" });
+
+        // Build unique dept & level lists
+        const deptMap = new Map(); // deptId => { _id, name, levels: Set }
+        courses.forEach(course => {
+            const deptId = course.department._id.toString();
+            if (!deptMap.has(deptId)) {
+                deptMap.set(deptId, { _id: deptId, name: course.department.name, levels: new Set() });
+            }
+            deptMap.get(deptId).levels.add(course.level);
+        });
+
+        const departments = Array.from(deptMap.values()).map(d => ({
+            _id: d._id,
+            name: d.name,
+            levels: Array.from(d.levels).sort((a, b) => a - b)
+        }));
+
+        res.json({
+            courses: courses.map(c => ({
+                _id: c._id,
+                name: c.name,
+                code: c.code,
+                level: c.level,
+                department: c.department,
+                enrolledCount: c.students.length
+            })),
+            departments
+        });
+    } catch (err) {
+        console.error("Error fetching admin courses:", err.message);
+        res.status(500).json({ msg: "Failed to fetch courses", error: err.message });
+    }
+});
+
+
+
+
+/// ======================= TEACHER VIEW STUDENTS ======================= ///
+router.get("/:courseId/students", auth, roleCheck(["teacher"]), async (req, res) => {
+    try {
+        const course = await Course.findById(req.params.courseId)
+            .populate("students", "name email department level studentId")
+            .populate("department", "name levels")
+            .populate("teacher", "name email");
+
+        if (!course) return res.status(404).json({ msg: "Course not found" });
+
+        if (course.teacher._id.toString() !== req.user.id) {
+            return res.status(403).json({ msg: "Not authorized" });
+        }
+
+        res.json({ students: formatCourse(course, true).students });
+    } catch (err) {
+        res.status(500).json({ msg: "Server error", error: err.message });
+    }
+});
+
+
 /// ======================= SINGLE COURSE ======================= ///
 router.get("/:id", auth, async (req, res) => {
     try {
@@ -157,7 +275,7 @@ router.get("/:id", auth, async (req, res) => {
             .populate("department", "name levels")
             .populate({
                 path: "students",
-                select: "name email department level studentId", // ✅ Added studentId here
+                select: "name email department level studentId",
                 populate: { path: "department", select: "name levels" },
             });
 
@@ -276,5 +394,6 @@ router.get("/filter", auth, async (req, res) => {
         res.status(500).json({ message: "Server error" });
     }
 });
+
 
 module.exports = router;

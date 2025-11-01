@@ -31,50 +31,54 @@ router.get("/", auth, async (req, res) => {
         // ROLE-BASED SCOPING
         // ----------------------
         if (user.role === "teacher") {
-            const teacherCourses = await Course.find({ teacher: user._id }).select("_id");
+            const teacherCourses = await Course.find({ teacher: user._id }).select("_id department level");
             const teacherCourseIds = teacherCourses.map(c => c._id.toString());
 
             if (teacherCourseIds.length === 0) {
-                return res.json({ success: true, leaderboard: [] }); // ✅ no courses yet
+                return res.status(403).json({
+                    success: false,
+                    message: "You are not assigned to any course yet. Leaderboard disabled."
+                });
             }
 
             if (courseId) {
                 if (!teacherCourseIds.includes(courseId)) {
-                    return res
-                        .status(403)
-                        .json({ success: false, message: "Not allowed to view this course leaderboard" });
+                    return res.status(403).json({
+                        success: false,
+                        message: "Not allowed to view this course leaderboard"
+                    });
                 }
                 matchStage.course = courseObjectId;
             } else {
                 matchStage.course = { $in: teacherCourseIds.map(id => mongoose.Types.ObjectId(id)) };
             }
         } else if (user.role === "student") {
+            const enrolledCourses = await Course.find({ students: user._id }).select("_id");
+            const enrolledCourseIds = enrolledCourses.map(c => c._id.toString());
+
+            if (enrolledCourseIds.length === 0) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You are not enrolled in any course yet. Leaderboard disabled."
+                });
+            }
+
             if (!courseId) {
-                return res
-                    .status(400)
-                    .json({ success: false, message: "Students must select a course" });
+                return res.status(400).json({
+                    success: false,
+                    message: "Students must select a course they are enrolled in."
+                });
             }
 
-            const course = await Course.findById(courseId).select("students department level");
-            if (!course)
-                return res.status(404).json({ success: false, message: "Course not found" });
-
-            // ✅ Ensure student is in the course
-            const isInCourse = course.students.some(
-                (s) => s.toString() === user._id.toString()
-            );
-            if (!isInCourse) {
-                return res
-                    .status(403)
-                    .json({ success: false, message: "You are not enrolled in this course" });
+            if (!enrolledCourseIds.includes(courseId)) {
+                return res.status(403).json({
+                    success: false,
+                    message: "You are not enrolled in this course."
+                });
             }
 
-            // ✅ No need to cross-check department/level — remove the strict check
             matchStage.course = courseObjectId;
-        }
-
-        else {
-            // admin
+        } else {
             if (courseId) matchStage.course = courseObjectId;
         }
 
@@ -83,16 +87,12 @@ router.get("/", auth, async (req, res) => {
         // ----------------------
         const pipeline = [
             { $match: matchStage },
-
-            // group by student+course
             {
                 $group: {
                     _id: { student: "$student", course: "$course" },
                     totalPresent: { $sum: 1 },
                 },
             },
-
-            // join student
             {
                 $lookup: {
                     from: "users",
@@ -102,8 +102,16 @@ router.get("/", auth, async (req, res) => {
                 },
             },
             { $unwind: { path: "$student", preserveNullAndEmptyArrays: false } },
-
-            // join course
+            // ✅ Lookup student's department details
+            {
+                $lookup: {
+                    from: "departments",
+                    localField: "student.department",
+                    foreignField: "_id",
+                    as: "student.departmentDetails",
+                },
+            },
+            { $unwind: { path: "$student.departmentDetails", preserveNullAndEmptyArrays: true } },
             {
                 $lookup: {
                     from: "courses",
@@ -115,21 +123,16 @@ router.get("/", auth, async (req, res) => {
             { $unwind: { path: "$course", preserveNullAndEmptyArrays: false } },
         ];
 
-        // ----------------------
-        // OPTIONAL FILTERS
-        // ----------------------
         if (department) {
             const deptObj = toObjectIdIfValid(department);
-            pipeline.push({ $match: { "student.department": deptObj || department } });
+            pipeline.push({ $match: { "course.department": deptObj } });
         }
 
         if (level) {
-            pipeline.push({ $match: { "student.level": parseInt(level, 10) } });
+            pipeline.push({ $match: { "course.level": parseInt(level, 10) } });
         }
 
-        // ----------------------
-        // FINAL PROJECTION
-        // ----------------------
+
         pipeline.push({
             $project: {
                 _id: 0,
@@ -137,7 +140,7 @@ router.get("/", auth, async (req, res) => {
                 studentId: { $ifNull: ["$student.studentId", "N/A"] },
                 name: { $ifNull: ["$student.name", "N/A"] },
                 email: { $ifNull: ["$student.email", "N/A"] },
-                department: "$student.department",
+                department: "$student.departmentDetails.name", // ✅ Student dept name
                 level: "$student.level",
                 courseId: "$course._id",
                 courseCode: "$course.code",
@@ -154,14 +157,10 @@ router.get("/", auth, async (req, res) => {
             },
         });
 
-        // sort
         pipeline.push({ $sort: { attendancePercentage: -1, totalPresent: -1 } });
 
         const leaderboard = await Attendance.aggregate(pipeline);
 
-        // ----------------------
-        // RANK + XP
-        // ----------------------
         leaderboard.forEach((row, idx) => {
             row.rank = idx + 1;
             row.xp = (row.totalPresent || 0) * 10;
@@ -169,7 +168,7 @@ router.get("/", auth, async (req, res) => {
 
         return res.json({ success: true, leaderboard });
     } catch (err) {
-        console.error("❌ Leaderboard route error:", err);
+        console.error("Leaderboard route error:", err);
         return res.status(500).json({ success: false, message: "Server error" });
     }
 });
