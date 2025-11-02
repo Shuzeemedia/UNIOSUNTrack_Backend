@@ -2,6 +2,7 @@ const express = require("express");
 const Course = require("../models/Course");
 const Department = require("../models/Department");
 const { auth, roleCheck } = require("../middleware/authMiddleware");
+const mongoose = require("mongoose");
 
 const router = express.Router();
 
@@ -126,6 +127,32 @@ router.get("/my-courses/student", auth, roleCheck(["student"]), async (req, res)
         res.status(500).json({ msg: "Server error", error: err.message });
     }
 });
+
+
+/// ======================= STUDENT AVAILABLE COURSES ======================= ///
+router.get("/available", auth, roleCheck(["student"]), async (req, res) => {
+    try {
+        const user = req.user;
+
+        // Get all courses in student's department and level
+        const courses = await Course.find({
+            department: user.department._id || user.department,
+            level: user.level,
+            students: { $ne: user._id }, // ✅ exclude courses the student is already enrolled in
+        })
+            .populate("teacher", "name email")
+            .populate("department", "name levels");
+
+        // Format courses for frontend
+        const formattedCourses = courses.map((c) => formatCourse(c));
+
+        res.json(formattedCourses);
+    } catch (err) {
+        console.error("Available courses error:", err.message);
+        res.status(500).json({ msg: "Server error" });
+    }
+});
+
 
 
 /// ======================= STUDENT ENROLLED COURSES (for leaderboard dropdown) ======================= ///
@@ -273,6 +300,48 @@ router.get("/:courseId/students", auth, roleCheck(["teacher"]), async (req, res)
 });
 
 
+
+
+
+/// ======================= FILTER COURSES BY DEPT / LEVEL ======================= ///
+router.get("/filter", auth, roleCheck(["student"]), async (req, res) => {
+    try {
+        const { department, level } = req.query;
+        const user = req.user;
+        const query = {
+            students: { $ne: user._id }, // ✅ exclude already enrolled courses
+        };
+
+        // Filter by department if provided
+        if (department) {
+            if (!mongoose.Types.ObjectId.isValid(department)) {
+                return res.status(400).json({ msg: "Invalid department ID" });
+            }
+            query.department = department;
+        }
+
+        // Filter by level if provided
+        if (level) {
+            const levelNum = Number(level);
+            if (isNaN(levelNum)) return res.status(400).json({ msg: "Invalid level" });
+            query.level = levelNum;
+        }
+
+        const courses = await Course.find(query)
+            .populate("teacher", "name email")
+            .populate("department", "name levels");
+
+        const formattedCourses = courses.map((c) => formatCourse(c));
+
+        res.json(formattedCourses);
+    } catch (err) {
+        console.error("Error filtering courses:", err.message);
+        res.status(500).json({ msg: "Server error" });
+    }
+});
+
+
+
 /// ======================= SINGLE COURSE ======================= ///
 router.get("/:id", auth, async (req, res) => {
     try {
@@ -331,6 +400,126 @@ router.post("/:courseId/enroll", auth, roleCheck(["admin"]), async (req, res) =>
 });
 
 
+/// ======================= ADMIN UNENROLLS STUDENT ======================= ///
+router.post("/:courseId/unenroll", auth, roleCheck(["admin"]), async (req, res) => {
+    const { studentId } = req.body;
+
+    if (!studentId) {
+        return res.status(400).json({ msg: "studentId is required" });
+    }
+
+    try {
+        const course = await Course.findById(req.params.courseId)
+            .populate("teacher", "name email")
+            .populate("department", "name levels")
+            .populate("students", "_id name email studentId"); // include students for frontend
+
+        if (!course) return res.status(404).json({ msg: "Course not found" });
+
+        // Check if student is in the course
+        const isEnrolled = course.students.some(
+            (s) => s._id.toString() === studentId.toString()
+        );
+        if (!isEnrolled) {
+            return res.status(400).json({ msg: "Student not enrolled in this course" });
+        }
+
+        // Remove student
+        course.students = course.students.filter(
+            (s) => s._id.toString() !== studentId.toString()
+        );
+        await course.save();
+
+        res.json({
+            msg: "Student unenrolled successfully",
+            unenrolled: true,
+            course: formatCourse(course, true), // include updated students list
+        });
+    } catch (err) {
+        console.error("Unenroll error:", err.message);
+        res.status(500).json({ msg: "Server error", error: err.message });
+    }
+
+
+});
+
+
+/// ======================= ADMIN UNASSIGNS LECTURER ======================= ///
+router.post("/:courseId/unassign-lecturer", auth, roleCheck(["admin"]), async (req, res) => {
+    try {
+        const { courseId } = req.params;
+
+        const course = await Course.findById(courseId);
+        if (!course) return res.status(404).json({ msg: "Course not found" });
+
+        // ✅ Remove lecturer assignment
+        course.teacher = null;
+        await course.save();
+
+        // ✅ Repopulate data for frontend
+        const updatedCourse = await Course.findById(courseId)
+            .populate("teacher", "name email")
+            .populate("department", "name levels");
+
+        res.json({
+            msg: "Lecturer unassigned successfully",
+            course: updatedCourse,
+        });
+    } catch (err) {
+        console.error("❌ Unassign lecturer error:", err);
+        res.status(500).json({
+            msg: "Server error while unassigning lecturer",
+            error: err.message,
+        });
+    }
+
+});
+
+
+
+/// ======================= STUDENT SELF ENROLL ======================= ///
+router.post("/:courseId/self-enroll", auth, roleCheck(["student"]), async (req, res) => {
+    try {
+        const user = req.user;
+        const course = await Course.findById(req.params.courseId).populate("department", "name");
+
+        if (!course) return res.status(404).json({ msg: "Course not found" });
+
+        // ✅ Only allow if same department & level match
+        if (
+            course.department._id.toString() !== user.department.toString() ||
+            course.level !== user.level
+        ) {
+            return res.status(403).json({
+                msg: "You can only enroll in courses from your department and level.",
+            });
+        }
+
+        // ✅ Prevent duplicates
+        if (course.students.includes(user.id)) {
+            return res.status(400).json({ msg: "Already enrolled in this course." });
+        }
+
+        // ✅ Add student
+        course.students.push(user.id);
+        await course.save();
+
+        const populated = await Course.findById(course._id)
+            .populate("teacher", "name email")
+            .populate("department", "name levels");
+
+        res.json({
+            msg: `Successfully enrolled in ${course.name}`,
+            course: formatCourse(populated),
+        });
+    } catch (err) {
+        console.error("Self-enroll error:", err.message);
+        res.status(500).json({ msg: "Server error", error: err.message });
+    }
+});
+
+
+
 /// ======================= GET ALL COURSES ======================= ///
 router.get("/", async (req, res) => {
     try {
@@ -380,26 +569,5 @@ router.put("/:id", auth, roleCheck(["admin"]), async (req, res) => {
         res.status(500).json({ msg: "Server error" });
     }
 });
-
-
-/// ======================= FILTER COURSES BY DEPT / LEVEL ======================= ///
-router.get("/filter", auth, async (req, res) => {
-    try {
-        const { department, level } = req.query;
-        let query = {};
-
-        if (department) query.department = department;
-        if (level) query.level = level;
-
-        const courses = await Course.find(query)
-            .populate("teacher", "name email")
-            .sort("code");
-
-        res.json(courses);
-    } catch (err) {
-        res.status(500).json({ message: "Server error" });
-    }
-});
-
 
 module.exports = router;

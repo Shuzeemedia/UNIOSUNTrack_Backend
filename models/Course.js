@@ -5,7 +5,13 @@ const courseSchema = new mongoose.Schema(
     name: { type: String, required: true, unique: true },
     description: { type: String, default: "" },
     code: { type: String, required: true, unique: true },
-    teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    teacher: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "User",
+      required: false,  // ✅ Allow null / unassigned lecturer
+      default: null,
+    },
+
     students: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
     department: { type: mongoose.Schema.Types.ObjectId, ref: "Department", required: true },
     level: { type: Number, required: true },
