@@ -118,21 +118,36 @@ router.get("/verify-email/:token", async (req, res) => {
 router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
+
+        // 1️⃣ Check if user exists by email
         const user = await User.findOne({ email })
             .populate("department", "name levels")
             .select("-__v");
 
-        if (!user) return res.status(400).json({ msg: "Invalid email or password" });
-        if (!user.isVerified)
-            return res.status(403).json({ msg: "Please verify your email before logging in." });
+        if (!user) {
+            // Email does not exist
+            return res.status(400).json({ field: "email", msg: "Email not found" });
+        }
 
+        // 2️⃣ Check if email is verified
+        if (!user.isVerified) {
+            return res.status(403).json({
+                msg: "Please verify your email before logging in.",
+            });
+        }
+
+        // 3️⃣ Check if password matches
         const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) return res.status(400).json({ msg: "Invalid email or password" });
+        if (!isMatch) {
+            return res.status(400).json({ field: "password", msg: "Incorrect password" });
+        }
 
+        // 4️⃣ Generate token
         const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
             expiresIn: "1d",
         });
 
+        // 5️⃣ Return user & token
         res.json({
             token,
             user: {
@@ -157,6 +172,7 @@ router.post("/login", async (req, res) => {
         res.status(500).json({ error: err.message });
     }
 });
+
 
 // ======================
 // 🧩 Forgot Password (Resend)
