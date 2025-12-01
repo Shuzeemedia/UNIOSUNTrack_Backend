@@ -8,7 +8,11 @@ const UserSchema = new mongoose.Schema(
     level: { type: Number },
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
-    role: { type: String, enum: ["student", "teacher", "admin"], default: "student" },
+    role: {
+      type: String,
+      enum: ["student", "teacher", "admin"],
+      default: "student",
+    },
     googleId: { type: String },
     profileImage: { type: String },
 
@@ -19,6 +23,9 @@ const UserSchema = new mongoose.Schema(
     // ✅ Forgot password reset
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date },
+
+    gpsAllowed: { type: Boolean, default: false },
+    faceImage: { type: String }, // path to stored face image
   },
   { timestamps: true }
 );

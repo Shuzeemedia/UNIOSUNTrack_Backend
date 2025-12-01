@@ -8,37 +8,43 @@ const router = express.Router();
 
 /// ======================= FORMATTER ======================= ///
 const formatCourse = (c, withStudents = false) => {
-    return {
-        _id: c._id,
-        name: c.name,
-        description: c.description,
-        code: c.code,
-        level: c.level,
-        unit: c.unit, // ✅ Added course unit
-        totalClasses: c.totalClasses || 0,
-        department: c.department
-            ? { _id: c.department._id, name: c.department.name, levels: c.department.levels }
-            : null,
-        teacher: c.teacher
-            ? { _id: c.teacher._id, name: c.teacher.name, email: c.teacher.email }
-            : null,
-        ...(withStudents && {
-            students: c.students
-                ? c.students.map((s) => ({
-                    _id: s._id,
-                    name: s.name,
-                    email: s.email,
-                    studentId: s.studentId || null, // ✅ include studentId
-                    level: s.level,
-                    department: s.department
-                        ? { _id: s.department._id, name: s.department.name }
-                        : null,
-                }))
-                : [],
-        }),
-        enrolledCount: c.students ? c.students.length : undefined,
-    };
+  return {
+    _id: c._id,
+    name: c.name,
+    description: c.description,
+    code: c.code,
+    level: c.level,
+    unit: c.unit, // ✅ Added course unit
+    totalClasses: c.totalClasses || 0,
+    department: c.department
+      ? {
+          _id: c.department._id,
+          name: c.department.name,
+          levels: c.department.levels,
+        }
+      : null,
+    teacher: c.teacher
+      ? { _id: c.teacher._id, name: c.teacher.name, email: c.teacher.email }
+      : null,
+    ...(withStudents && {
+      students: c.students
+        ? c.students.map((s) => ({
+            _id: s._id,
+            name: s.name,
+            email: s.email,
+            studentId: s.studentId || null,
+            level: s.level,
+            department: s.department
+              ? { _id: s.department._id, name: s.department.name }
+              : null,
+            profileImage: s.profileImage || "", // include profileImage
+          }))
+        : [],
+    }),
+    enrolledCount: c.students ? c.students.length : undefined,
+  };
 };
+
 
 
 /// ======================= CREATE COURSE ======================= ///
@@ -280,24 +286,33 @@ router.get("/admin-filter", auth, roleCheck(["admin"]), async (req, res) => {
 
 
 /// ======================= TEACHER VIEW STUDENTS ======================= ///
-router.get("/:courseId/students", auth, roleCheck(["teacher"]), async (req, res) => {
+router.get(
+  "/:courseId/students",
+  auth,
+  roleCheck(["teacher"]),
+  async (req, res) => {
     try {
-        const course = await Course.findById(req.params.courseId)
-            .populate("students", "name email department level studentId")
-            .populate("department", "name levels")
-            .populate("teacher", "name email");
+      const course = await Course.findById(req.params.courseId)
+        .populate(
+          "students",
+          "name email department level studentId profileImage"
+        )
+        .populate("department", "name levels")
+        .populate("teacher", "name email");
 
-        if (!course) return res.status(404).json({ msg: "Course not found" });
+      if (!course) return res.status(404).json({ msg: "Course not found" });
 
-        if (course.teacher._id.toString() !== req.user.id) {
-            return res.status(403).json({ msg: "Not authorized" });
-        }
+      if (course.teacher._id.toString() !== req.user.id) {
+        return res.status(403).json({ msg: "Not authorized" });
+      }
 
-        res.json({ students: formatCourse(course, true).students });
+      res.json({ students: formatCourse(course, true).students });
     } catch (err) {
-        res.status(500).json({ msg: "Server error", error: err.message });
+      res.status(500).json({ msg: "Server error", error: err.message });
     }
-});
+  }
+);
+
 
 
 

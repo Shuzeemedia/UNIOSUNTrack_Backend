@@ -8,13 +8,25 @@ const courseSchema = new mongoose.Schema(
     teacher: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",
-      required: false,  // ✅ Allow null / unassigned lecturer
+      required: false, // ✅ Allow null / unassigned lecturer
       default: null,
     },
 
     students: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
-    department: { type: mongoose.Schema.Types.ObjectId, ref: "Department", required: true },
+    department: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Department",
+      required: true,
+    },
     level: { type: Number, required: true },
+
+    // NEW
+    semester: {
+      type: String,
+      enum: ["Harmattan", "Rain"],
+      required: true,
+    },
+
     totalClasses: { type: Number, default: 0 },
 
     // ✅ New field
@@ -28,6 +40,5 @@ const courseSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
-
 
 module.exports = mongoose.model("Course", courseSchema);
