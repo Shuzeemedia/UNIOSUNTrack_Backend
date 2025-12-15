@@ -22,8 +22,8 @@ const courseSchema = new mongoose.Schema(
 
     // NEW
     semester: {
-      type: String,
-      enum: ["Harmattan", "Rain"],
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Semester",
       required: true,
     },
 
@@ -37,6 +37,14 @@ const courseSchema = new mongoose.Schema(
       max: 6,
       default: 3,
     },
+
+    // GPS location where attendance is allowed
+    location: {
+      lat: { type: Number },
+      lng: { type: Number },
+      radius: { type: Number, default: 100 }, // meters
+    },
+
   },
   { timestamps: true }
 );

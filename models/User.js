@@ -1,3 +1,5 @@
+// In models/User.js
+
 const mongoose = require("mongoose");
 
 const UserSchema = new mongoose.Schema(
@@ -16,16 +18,17 @@ const UserSchema = new mongoose.Schema(
     googleId: { type: String },
     profileImage: { type: String },
 
-    // ✅ Email verification
+    // Email verification
     isVerified: { type: Boolean, default: false },
     verificationToken: { type: String },
 
-    // ✅ Forgot password reset
+    // Forgot password reset
     resetPasswordToken: { type: String },
     resetPasswordExpires: { type: Date },
 
     gpsAllowed: { type: Boolean, default: false },
     faceImage: { type: String }, // path to stored face image
+    faceDescriptor: { type: [Number], default: [] }, // ✅ ADD THIS
   },
   { timestamps: true }
 );

@@ -13,6 +13,12 @@ const attendanceRoutes = require("./routes/attendanceRoutes"); // ✅ Attendance
 const sessionRoutes = require("./routes/sessionRoutes");
 const departmentRoutes = require("./routes/departmentRoutes");
 const profileRoutes = require("./routes/profile");
+const semestersRouter = require("./routes/semesters");
+const sessionX = require("./routes/session");
+const settingsRoutes = require("./routes/settings");
+
+
+
 
 
 // Load environment variables
@@ -40,6 +46,13 @@ app.use("/api/sessions", sessionRoutes);
 app.use("/api/departments", departmentRoutes);
 app.use("/api/profile", profileRoutes);
 app.use("/api/leaderboard", require("./routes/leaderboardRoutes"));
+app.use("/api/semesters", semestersRouter);
+// existing API prefix
+app.use("/api/session", sessionX);
+app.use("/api/settings", settingsRoutes);
+
+
+
 
 // Database connection & server start
 const PORT = process.env.PORT || 5000;

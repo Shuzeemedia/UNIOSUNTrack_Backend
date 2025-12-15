@@ -14,7 +14,9 @@ const router = express.Router();
    🧠 Helper — Mark absentees safely (no duplicates)
 ---------------------------------------------------- */
 const markAbsenteesForSession = async (session) => {
-  const course = await Course.findById(session.course._id).populate("students", "_id");
+  const course = await Course.findById(session.course._id)
+    .populate("students", "_id")
+    .populate("semester");
   const allStudents = course.students.map((s) => s._id.toString());
   const presentStudents = await Attendance.find({ session: session._id }).distinct("student");
   const absentees = allStudents.filter((s) => !presentStudents.includes(s));
@@ -33,9 +35,15 @@ const markAbsenteesForSession = async (session) => {
           course: session.course._id,
           student: sid,
           session: session._id,
+          semester: course.semester,
           status: "Absent",
         });
       }
+    }
+
+    if (!course.semester) {
+      console.error("Semester missing for course:", course._id);
+      return;
     }
 
     if (absentRecords.length > 0) {
@@ -45,6 +53,23 @@ const markAbsenteesForSession = async (session) => {
     console.log(`✅ Absentees marked for session ${session._id}: ${absentRecords.length} entries`);
   }
 };
+
+function getDistanceInMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000;
+  const toRad = (x) => (x * Math.PI) / 180;
+
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) *
+    Math.cos(toRad(lat2)) *
+    Math.sin(dLng / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
 
 /* ----------------------------------------------------
    🕒 Helper — End Session Automatically (on expiry)
@@ -91,6 +116,7 @@ router.get("/active/:courseId", auth, async (req, res) => {
         course: session.course,
         expiresAt: session.expiresAt,
         status: session.status,
+
       },
     });
   } catch (err) {
@@ -99,35 +125,60 @@ router.get("/active/:courseId", auth, async (req, res) => {
   }
 });
 
-/* ----------------------------------------------------
-   ✅ GET session info by token (student scan)
----------------------------------------------------- */
-router.get("/:token", async (req, res) => {
+
+
+/**
+ * STUDENT SCAN (requires auth)
+ */
+router.get("/:token/student", auth, async (req, res) => {
   try {
-    const { token } = req.params;
-    const session = await Session.findOne({ token })
-      .populate("course", "name code")
-      .populate("teacher", "name email");
+    const session = await Session.findOne({ token: req.params.token });
+    if (!session) {
+      return res.status(404).json({ msg: "Session not found" });
+    }
 
-    if (!session) return res.status(404).json({ msg: "Session not found" });
+    const student = await User.findById(req.user.id);
+    if (!student || !student.faceDescriptor?.length) {
+      return res.status(400).json({ msg: "Face descriptor missing" });
+    }
 
-    const expired = new Date() > new Date(session.expiresAt);
     res.json({
-      msg: "Session retrieved",
-      session: {
-        id: session._id,
-        course: session.course,
-        teacher: session.teacher,
-        expired,
-        expiresAt: session.expiresAt,
-        token: session.token,
-      },
+      sessionId: session._id,
+      studentFaceDescriptor: student.faceDescriptor,
     });
   } catch (err) {
-    console.error("GET /session/:token error:", err.message);
-    res.status(500).json({ msg: "Server error", error: err.message });
+    console.error(err);
+    res.status(500).json({ msg: "Server error" });
   }
 });
+
+/**
+ * LECTURER VIEW (NO auth)
+ */
+router.get("/:token", auth, async (req, res) => {
+  try {
+    const session = await Session.findOne({ token: req.params.token })
+      .populate({
+        path: "course",
+        populate: {
+          path: "teacher",
+          select: "name email role",
+        },
+      });
+
+    if (!session) {
+      return res.status(404).json({ msg: "Session not found" });
+    }
+
+    res.json({
+      session,
+    });
+  } catch (err) {
+    console.error("Session fetch error:", err);
+    res.status(500).json({ msg: "Server error" });
+  }
+});
+
 
 /* ----------------------------------------------------
    ✅ TEACHER creates new QR session (10 min)
@@ -202,8 +253,9 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
   try {
     const { token } = req.params;
     const userId = req.user.id;
+    const { location } = req.body;
 
-    // Find active session by either original or rotated token
+    // --- Find active session by original or rotated token ---
     const session = await Session.findOne({
       status: "active",
       $or: [
@@ -214,18 +266,39 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
 
     if (!session) return res.status(404).json({ msg: "Invalid or expired QR" });
 
+    // --- Check session expiry ---
     if (new Date() > new Date(session.expiresAt)) {
       return res.status(400).json({ msg: "Session expired" });
     }
 
-    // Check student enrollment
+    // --- Check student enrollment ---
     const course = await Course.findById(session.course._id).populate("students", "_id");
     const isEnrolled = course.students.some((s) => s._id.toString() === userId);
-    if (!isEnrolled) {
-      return res.status(400).json({ msg: "You are not enrolled in this course" });
+    if (!isEnrolled) return res.status(403).json({ msg: "You are not enrolled in this course" });
+
+    // --- GPS location validation ---
+    if (session.course.location?.lat && session.course.location?.lng) {
+      if (!location || location.lat == null || location.lng == null) {
+        return res.status(400).json({ msg: "Location is required to mark attendance" });
+      }
+
+      if (location.accuracy && location.accuracy > 50) {
+        return res.status(400).json({ msg: "Location accuracy too low. Move to open space." });
+      }
+
+      const distance = getDistanceInMeters(
+        parseFloat(location.lat),
+        parseFloat(location.lng),
+        parseFloat(session.course.location.lat),
+        parseFloat(session.course.location.lng)
+      );
+
+      if (distance > session.course.location.radius) {
+        return res.status(403).json({ msg: "You are not within the lecture location" });
+      }
     }
 
-    // Prevent duplicates
+    // --- Prevent duplicate attendance ---
     const alreadyMarked = await Attendance.findOne({
       course: session.course._id,
       student: userId,
@@ -233,29 +306,40 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
     });
     if (alreadyMarked) return res.status(400).json({ msg: "Attendance already marked" });
 
-    // Record attendance
+    // --- Record attendance ---
     const attendance = new Attendance({
       course: session.course._id,
       student: userId,
       session: session._id,
+      semester: session.course.semester,
       status: "Present",
       date: new Date(),
+      faceVerifiedAt: new Date(), // optional: logs that face was verified
+      location: location ? { lat: location.lat, lng: location.lng } : undefined,
     });
+
     await attendance.save();
 
-    // Rotate the QR token automatically if this was the original token
+    // --- Rotate QR token if original token was used ---
     if (session.token === token) {
       const newToken = crypto.randomBytes(12).toString("hex");
       session.validTokens = [{ token: newToken, expiresAt: new Date(Date.now() + 10 * 1000) }];
       await session.save();
     }
 
-    res.json({ msg: "Attendance recorded", attendance });
+    res.json({
+      msg: "Attendance recorded successfully",
+      sessionId: session._id,
+      studentId: userId,
+      attendanceId: attendance._id,
+    });
+
   } catch (err) {
     console.error("POST /sessions/scan/:token error:", err.message);
     res.status(500).json({ msg: "Server error", error: err.message });
   }
 });
+
 
 
 /* ----------------------------------------------------

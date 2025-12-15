@@ -69,4 +69,5 @@ sessionSchema.methods.isTokenValid = function (token) {
   );
 };
 
+
 module.exports = mongoose.model("Session", sessionSchema);

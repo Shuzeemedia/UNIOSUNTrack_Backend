@@ -12,40 +12,41 @@ const AttendanceSchema = new mongoose.Schema({
     required: true,
   },
 
-  // Harmattan or Rain
+  // NEW: reference to Semester
   semester: {
-    type: String,
-    enum: ["Harmattan", "Rain"],
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Semester",
     required: true,
   },
 
-  // Present | Absent | NA
+  session: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "SessionX",
+    required: true,
+  },  
+
   status: {
     type: String,
     enum: ["Present", "Absent", "NA"],
     default: "NA",
   },
 
-  // Store GPS location
   gpsLocation: {
     lat: Number,
     lng: Number,
     accuracy: Number,
   },
 
-  // Optional face verification (true/false)
   faceVerified: {
     type: Boolean,
     default: false,
   },
 
-  // Lecturer that marked this attendance
   markedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
   },
 
-  // If attendance was taken using Roll-Call Mode
   rollCallMode: {
     type: Boolean,
     default: false,

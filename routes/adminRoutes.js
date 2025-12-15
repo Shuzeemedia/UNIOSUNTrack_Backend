@@ -284,6 +284,83 @@ router.put("/teachers/:id/department", auth, roleCheck(["admin"]), async (req, r
 });
 
 
+// ======================================
+// ADMIN PROMOTE STUDENTS (LEVEL UPDATE)
+// ======================================
+router.post("/promote-level", auth, roleCheck(["admin"]), async (req, res) => {
+    const { departmentId } = req.body;
+    // if departmentId is provided → promote only that dept
+    // if not → promote all students in system
+
+    try {
+        // Fetch students
+        const studentQuery = departmentId ? { department: departmentId } : {};
+        const students = await User.find(studentQuery).populate("department");
+
+        if (!students.length) {
+            return res.status(404).json({ msg: "No students found" });
+        }
+
+        let updatedStudents = [];
+
+        for (const student of students) {
+            const dept = student.department;
+
+            // department levels array, sorted e.g. [100, 200, 300, 400]
+            const sortedLevels = dept.levels.sort((a, b) => a - b);
+            const maxLevel = sortedLevels[sortedLevels.length - 1];
+
+            if (student.level < maxLevel) {
+                // promote
+                student.level += 1;
+                await student.save();
+
+                // auto-unenroll from previous-level courses
+                await Course.updateMany(
+                    { students: student._id, level: { $ne: student.level } },
+                    { $pull: { students: student._id } }
+                );
+
+                updatedStudents.push({
+                    id: student._id,
+                    name: student.name,
+                    newLevel: student.level,
+                    status: "promoted"
+                });
+
+            } else {
+                // student is at final level → graduate
+                student.isGraduated = true;
+                await student.save();
+
+                // remove from all courses
+                await Course.updateMany(
+                    { students: student._id },
+                    { $pull: { students: student._id } }
+                );
+
+                updatedStudents.push({
+                    id: student._id,
+                    name: student.name,
+                    newLevel: student.level,
+                    status: "graduated"
+                });
+            }
+        }
+
+        res.json({
+            msg: "Level promotion complete",
+            count: updatedStudents.length,
+            students: updatedStudents
+        });
+
+    } catch (err) {
+        console.error("Level promotion error:", err);
+        res.status(500).json({ msg: "Server error", error: err.message });
+    }
+});
+
+
 // POST /admin/seed-admin  -- DO NOT KEEP IN PRODUCTION
 // router.post("/seed-admin", async (req, res) => {
 //     try {

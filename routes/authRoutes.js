@@ -113,49 +113,70 @@ router.get("/verify-email/:token", async (req, res) => {
 
 
 // ======================
-// 🔐 Login
+// 🔐 Login Route (Fixed)
 // ======================
 router.post("/login", async (req, res) => {
     try {
         const { email, password } = req.body;
 
-        // 1️⃣ Check if user exists by email
-        const user = await User.findOne({ email })
-            .populate("department", "name levels")
-            .select("-__v");
-
-        if (!user) {
-            // Email does not exist
-            return res.status(400).json({ field: "email", msg: "Email not found" });
+        // 1️⃣ Validate input
+        if (!email || !password) {
+            return res.status(400).json({ msg: "Email and password are required" });
         }
 
-        // 2️⃣ Check if email is verified
+        // 2️⃣ Find user (include isVerified explicitly)
+        const user = await User.findOne({ email })
+            .populate("department", "name levels")
+            .select("+isVerified"); // ✅ ensure isVerified is fetched
+
+        if (!user) {
+            return res.status(400).json({
+                field: "email",
+                msg: "Email not found",
+            });
+        }
+
+        // 3️⃣ Debug logging to verify user object
+        console.log("Login attempt for user:", {
+            email: user.email,
+            isVerified: user.isVerified,
+            role: user.role,
+            studentId: user.studentId,
+        });
+
+        // 4️⃣ Check email verification
         if (!user.isVerified) {
             return res.status(403).json({
                 msg: "Please verify your email before logging in.",
             });
         }
 
-        // 3️⃣ Check if password matches
+        // 5️⃣ Check password
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({ field: "password", msg: "Incorrect password" });
+            return res.status(400).json({
+                field: "password",
+                msg: "Incorrect password",
+            });
         }
 
-        // 4️⃣ Generate token
-        const token = jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, {
-            expiresIn: "1d",
-        });
+        // 6️⃣ Generate JWT
+        const token = jwt.sign(
+            { id: user._id, role: user.role },
+            process.env.JWT_SECRET,
+            { expiresIn: "1d" }
+        );
 
-        // 5️⃣ Return user & token
-        res.json({
+        // 7️⃣ Send user data including face info
+        return res.json({
             token,
             user: {
                 id: user._id,
                 name: user.name,
                 email: user.email,
                 role: user.role,
-                studentId: user.studentId,
+                studentId: user.studentId || null,
+                level: user.level || null,
                 department: user.department
                     ? {
                         id: user.department._id,
@@ -163,15 +184,62 @@ router.post("/login", async (req, res) => {
                         levels: user.department.levels,
                     }
                     : null,
-                level: user.level,
                 profileImage: user.profileImage || null,
+                faceImage: user.faceImage || null,
+                faceDescriptor: Array.isArray(user.faceDescriptor)
+                    ? user.faceDescriptor
+                    : [],
             },
         });
     } catch (err) {
         console.error("ERROR /auth/login:", err);
-        res.status(500).json({ error: err.message });
+        return res.status(500).json({
+            msg: "Server error. Please try again later.",
+        });
     }
 });
+
+
+
+// ======================
+// 🧠 Enroll Face (Students Only)
+// ======================
+router.post("/enroll-face", auth, async (req, res) => {
+    try {
+        const { faceImage, faceDescriptor } = req.body;
+
+        // Validate input
+        if (!faceImage || !faceDescriptor || !Array.isArray(faceDescriptor)) {
+            return res.status(400).json({ msg: "Face image and descriptor are required" });
+        }
+
+        if (faceDescriptor.length !== 128) {
+            return res.status(400).json({ msg: "Face descriptor invalid. Must be 128 numbers." });
+        }
+
+        // Convert all elements to numbers just in case
+        const descriptorNumbers = faceDescriptor.map(num => Number(num));
+
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: "User not found" });
+        if (user.role !== "student") return res.status(403).json({ msg: "Face enrollment only allowed for students" });
+
+        // Save face data
+        user.faceDescriptor = descriptorNumbers;
+        user.faceImage = faceImage;
+
+        await user.save();
+
+        return res.json({ msg: "Face enrolled successfully", faceImage: user.faceImage });
+    } catch (err) {
+        console.error("ERROR /auth/enroll-face:", err);
+        return res.status(500).json({ msg: "Server error" });
+    }
+});
+
+
+
+
 
 
 // ======================
@@ -253,6 +321,8 @@ router.get("/me", auth, async (req, res) => {
                 email: user.email,
                 role: user.role,
                 studentId: user.studentId,
+                level: user.level,
+
                 department: user.department
                     ? {
                         id: user.department._id,
@@ -260,10 +330,17 @@ router.get("/me", auth, async (req, res) => {
                         levels: user.department.levels,
                     }
                     : null,
-                level: user.level,
+
                 profileImage: user.profileImage || null,
+                faceImage: user.faceImage || null,
+
+                // 🔥 THIS IS WHAT YOU WERE MISSING
+                faceDescriptor: Array.isArray(user.faceDescriptor)
+                    ? user.faceDescriptor
+                    : [],
             },
         });
+
     } catch (err) {
         console.error("ERROR /auth/me:", err);
         res.status(500).json({ error: err.message });
