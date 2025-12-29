@@ -202,41 +202,178 @@ router.post("/login", async (req, res) => {
 
 
 // ======================
-// 🧠 Enroll Face (Students Only)
+// 🧠 Enroll Face (Students Only) — FIXED
 // ======================
 router.post("/enroll-face", auth, async (req, res) => {
     try {
         const { faceImage, faceDescriptor } = req.body;
 
-        // Validate input
-        if (!faceImage || !faceDescriptor || !Array.isArray(faceDescriptor)) {
+        // 1️⃣ Validate input
+        if (!faceImage || !Array.isArray(faceDescriptor)) {
             return res.status(400).json({ msg: "Face image and descriptor are required" });
         }
-
         if (faceDescriptor.length !== 128) {
-            return res.status(400).json({ msg: "Face descriptor invalid. Must be 128 numbers." });
+            return res.status(400).json({ msg: "Face descriptor must contain 128 values" });
         }
 
-        // Convert all elements to numbers just in case
-        const descriptorNumbers = faceDescriptor.map(num => Number(num));
-
+        // 2️⃣ Fetch current user
         const user = await User.findById(req.user.id);
         if (!user) return res.status(404).json({ msg: "User not found" });
-        if (user.role !== "student") return res.status(403).json({ msg: "Face enrollment only allowed for students" });
+        if (user.role !== "student") return res.status(403).json({ msg: "Face enrollment is only allowed for students" });
 
-        // Save face data
-        user.faceDescriptor = descriptorNumbers;
+        // 3️⃣ Fetch other enrolled users
+        const otherUsers = await User.find({
+            _id: { $ne: user._id },
+            faceDescriptor: { $type: "array" },
+        }).select("faceDescriptor");
+
+        // 4️⃣ Distance function (Euclidean)
+        const faceDistance = (a, b) =>
+            Math.sqrt(a.reduce((sum, v, i) => sum + (v - b[i]) ** 2, 0));
+
+        // 5️⃣ Thresholds
+        const DUPLICATE_THRESHOLD = 0.45; // Block if face is already used
+        const UNCLEAR_THRESHOLD = 0.2;    // Optional: for re-enroll only
+
+        // 6️⃣ Check duplicates only (422 only for same user if needed)
+        for (const u of otherUsers) {
+            if (!Array.isArray(u.faceDescriptor)) continue;
+            if (u.faceDescriptor.length !== 128) continue;
+
+            const distance = faceDistance(u.faceDescriptor, faceDescriptor.map(Number));
+
+            if (distance < DUPLICATE_THRESHOLD) {
+                return res.status(409).json({
+                    msg: "This face is already enrolled by another user.",
+                    distance,
+                });
+            }
+        }
+
+        // 7️⃣ Save face for current user
+        user.faceDescriptor = faceDescriptor.map(Number);
         user.faceImage = faceImage;
-
         await user.save();
 
-        return res.json({ msg: "Face enrolled successfully", faceImage: user.faceImage });
+        return res.status(200).json({ msg: "Face enrolled successfully" });
+
     } catch (err) {
-        console.error("ERROR /auth/enroll-face:", err);
-        return res.status(500).json({ msg: "Server error" });
+        console.error("Enroll face error:", err);
+        return res.status(500).json({ msg: "Face enrollment failed. Try again." });
     }
 });
 
+router.post("/reenroll-face", auth, async (req, res) => {
+    try {
+        const { faceDescriptor, faceImage, oldFaceDescriptor } = req.body;
+
+        if (
+            !Array.isArray(faceDescriptor) ||
+            faceDescriptor.length !== 128 ||
+            !Array.isArray(oldFaceDescriptor) ||
+            oldFaceDescriptor.length !== 128
+        ) {
+            return res.status(400).json({ msg: "Invalid face data" });
+        }
+
+        const user = await User.findById(req.user.id);
+        if (!user || !Array.isArray(user.faceDescriptor)) {
+            return res.status(400).json({ msg: "No existing face to re-enroll" });
+        }
+
+        // Step 1: Verify old face first
+        const verifyDistance = Math.sqrt(
+            user.faceDescriptor.reduce((sum, v, i) => sum + (v - oldFaceDescriptor[i]) ** 2, 0)
+        );
+
+        if (verifyDistance > 0.45) {
+            return res.status(401).json({
+                msg: "Old face verification failed",
+                distance: verifyDistance,
+            });
+        }
+
+        // Step 2: Distance function
+        const distance = (a, b) =>
+            Math.sqrt(a.reduce((sum, v, i) => sum + (v - b[i]) ** 2, 0));
+
+        // Step 3: Check if new face is same as old face
+        const distanceToOld = distance(user.faceDescriptor, faceDescriptor);
+        if (distanceToOld < 0.01) {
+            user.faceDescriptor = faceDescriptor.map(Number);
+            user.faceImage = faceImage;
+            await user.save();
+            return res.json({ msg: "Face re-enrolled successfully (same as old)" });
+        }
+
+        // Step 4: Check other users for duplicates, ignoring own old face
+        const otherUsers = await User.find({
+            _id: { $ne: user._id },
+            faceDescriptor: { $type: "array" },
+        });
+
+        for (const u of otherUsers) {
+            if (!Array.isArray(u.faceDescriptor) || u.faceDescriptor.length !== 128) continue;
+
+            const dist = distance(u.faceDescriptor, faceDescriptor.map(Number));
+
+            if (dist < 0.45) {
+                return res.status(409).json({
+                    msg: "This face is already used by another user",
+                    distance: dist,
+                });
+            }
+        }
+
+        // Step 5: Update face
+        user.faceDescriptor = faceDescriptor.map(Number);
+        user.faceImage = faceImage;
+        await user.save();
+
+        return res.json({ msg: "Face re-enrolled successfully" });
+
+    } catch (err) {
+        console.error("Re-enroll face error:", err);
+        res.status(500).json({ msg: "Face re-enrollment failed" });
+    }
+});
+
+
+
+
+router.post("/verify-face", auth, async (req, res) => {
+    try {
+        const { faceDescriptor } = req.body;
+        if (!Array.isArray(faceDescriptor) || faceDescriptor.length !== 128) {
+            return res.status(400).json({ msg: "Invalid face data" });
+        }
+
+        const user = await User.findById(req.user.id);
+        if (!user || !Array.isArray(user.faceDescriptor)) {
+            return res.status(400).json({ msg: "Face not enrolled" });
+        }
+
+        const distance = Math.sqrt(
+            user.faceDescriptor.reduce(
+                (sum, v, i) => sum + (v - faceDescriptor[i]) ** 2,
+                0
+            )
+        );
+
+        // STRICT login threshold
+        if (distance > 0.45) {
+            return res.status(401).json({
+                msg: "Face verification failed",
+                distance,
+            });
+        }
+
+        return res.json({ msg: "Face verified successfully" });
+    } catch (err) {
+        console.error("Verify face error:", err);
+        res.status(500).json({ msg: "Face verification error" });
+    }
+});
 
 
 

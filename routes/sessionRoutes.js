@@ -18,7 +18,14 @@ const markAbsenteesForSession = async (session) => {
     .populate("students", "_id")
     .populate("semester");
   const allStudents = course.students.map((s) => s._id.toString());
-  const presentStudents = await Attendance.find({ session: session._id }).distinct("student");
+  const today = getStartOfDay(session.createdAt);
+
+  const presentStudents = await Attendance.find({
+    course: session.course._id,
+    date: { $gte: today },
+    status: "Present",
+  }).distinct("student");
+
   const absentees = allStudents.filter((s) => !presentStudents.includes(s));
 
   if (absentees.length > 0) {
@@ -28,8 +35,9 @@ const markAbsenteesForSession = async (session) => {
       const exists = await Attendance.findOne({
         course: session.course._id,
         student: sid,
-        session: session._id,
+        date: { $gte: today },
       });
+
       if (!exists) {
         absentRecords.push({
           course: session.course._id,
@@ -53,6 +61,12 @@ const markAbsenteesForSession = async (session) => {
     console.log(`✅ Absentees marked for session ${session._id}: ${absentRecords.length} entries`);
   }
 };
+
+function getStartOfDay(date = new Date()) {
+  const d = new Date(date);
+  d.setHours(0, 0, 0, 0);
+  return d;
+}
 
 function getDistanceInMeters(lat1, lng1, lat2, lng2) {
   const R = 6371000;
@@ -259,10 +273,18 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
     const session = await Session.findOne({
       status: "active",
       $or: [
-        { token: token },                // original token
-        { "validTokens.token": token }   // rotated token
-      ]
-    }).populate("course");
+        { token },
+        {
+          validTokens: {
+            $elemMatch: {
+              token,
+              expiresAt: { $gt: new Date() },
+            },
+          },
+        },
+      ],
+    });
+
 
     if (!session) return res.status(404).json({ msg: "Invalid or expired QR" });
 
@@ -299,26 +321,34 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
     }
 
     // --- Prevent duplicate attendance ---
-    const alreadyMarked = await Attendance.findOne({
-      course: session.course._id,
-      student: userId,
-      session: session._id,
-    });
-    if (alreadyMarked) return res.status(400).json({ msg: "Attendance already marked" });
+    // --- Prevent duplicate attendance PER DAY (NOT per session) ---
+    const today = getStartOfDay();
 
-    // --- Record attendance ---
-    const attendance = new Attendance({
-      course: session.course._id,
-      student: userId,
-      session: session._id,
-      semester: session.course.semester,
-      status: "Present",
-      date: new Date(),
-      faceVerifiedAt: new Date(), // optional: logs that face was verified
-      location: location ? { lat: location.lat, lng: location.lng } : undefined,
-    });
+    const attendance = await Attendance.findOneAndUpdate(
+      {
+        course: session.course._id,
+        student: userId,
+        date: { $gte: today },
+      },
+      {
+        course: session.course._id,
+        student: userId,
+        session: session._id, // keep last session reference
+        semester: session.course.semester,
+        status: "Present",
+        date: today,
+        faceVerifiedAt: new Date(),
+        location: location
+          ? { lat: location.lat, lng: location.lng }
+          : undefined,
+      },
+      {
+        new: true,
+        upsert: true,
+        setDefaultsOnInsert: true,
+      }
+    );
 
-    await attendance.save();
 
     // --- Rotate QR token if original token was used ---
     if (session.token === token) {

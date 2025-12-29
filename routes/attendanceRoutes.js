@@ -46,6 +46,8 @@ function buildDateFilter(date, range) {
   return null;
 }
 
+
+
 // ======================= TEACHER ROUTES ======================= //
 
 // Teacher marks attendance manually (one student)
