@@ -54,11 +54,21 @@ const AttendanceSchema = new mongoose.Schema({
 
   date: {
     type: Date,
-    default: Date.now,
+    required: true,
   },
+
+  dayKey: {
+    type: String,
+    required: true,
+  },  
+  
 });
 
 // Prevent duplicate attendance per student per day
-AttendanceSchema.index({ course: 1, student: 1, date: 1 }, { unique: true });
+AttendanceSchema.index(
+  { course: 1, student: 1, dayKey: 1 },
+  { unique: true }
+);
+
 
 module.exports = mongoose.model("Attendance", AttendanceSchema);

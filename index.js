@@ -18,6 +18,7 @@ const sessionX = require("./routes/session");
 const settingsRoutes = require("./routes/settings");
 
 
+const { startAutoExpireLoop } = require("./utils/autoExpireSessions");
 
 
 
@@ -55,7 +56,6 @@ app.use("/api/settings", settingsRoutes);
 
 
 
-
 // Database connection & server start
 const PORT = process.env.PORT || 5000;
 
@@ -69,3 +69,6 @@ mongoose
     app.listen(PORT, () => console.log(`🚀 Server running on port ${PORT}`));
   })
   .catch((err) => console.error("❌ DB Connection Error:", err));
+
+startAutoExpireLoop();
+
