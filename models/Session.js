@@ -6,6 +6,16 @@ const sessionSchema = new mongoose.Schema({
     ref: "Course",
     required: true,
   },
+
+  
+
+  // semester
+  semester: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Semester",
+    required: true,
+  },
+
   teacher: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "User",
@@ -15,15 +25,24 @@ const sessionSchema = new mongoose.Schema({
   // The main session token (used for session reference)
   token: {
     type: String,
-    required: true,
+    required: function() { return this.type === "QR"; }, // ✅ required only for QR
     unique: true,
   },
+  
 
   // When the session itself expires (10 mins after creation)
   expiresAt: {
     type: Date,
     required: true,
   },
+
+  type: {
+    type: String,
+    enum: ["QR", "MANUAL", "ROLLCALL"],
+    required: true,
+    set: v => v.toUpperCase(),
+  },
+  
 
   status: {
     type: String,
@@ -38,10 +57,10 @@ const sessionSchema = new mongoose.Schema({
       expiresAt: Date,
     },
   ],
-});
 
-// Auto-remove session after expiration (MongoDB TTL)
-sessionSchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
+},
+{ timestamps: true }
+);
 
 // Clean expired QR tokens automatically
 sessionSchema.methods.cleanExpiredTokens = function () {

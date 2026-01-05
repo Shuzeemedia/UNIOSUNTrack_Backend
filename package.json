@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "nodemon index.js"
+    "start": "node index.js",
+    "dev": "nodemon --legacy-watch index.js"
   },
   "keywords": [],
   "author": "",
@@ -24,6 +24,7 @@
     "nodemailer": "^7.0.9",
     "qrcode": "^1.5.4",
     "resend": "^6.3.0",
+    "socket.io": "^4.8.3",
     "streamifier": "^0.1.1",
     "uuid": "^11.1.0"
   },

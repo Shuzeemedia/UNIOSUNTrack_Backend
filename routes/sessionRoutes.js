@@ -1,7 +1,9 @@
 const express = require("express");
+const { ObjectId } = require("mongodb");
 const Session = require("../models/Session");
 const Attendance = require("../models/Attendance");
 const Course = require("../models/Course");
+const Enrollment = require("../models/Enrollment");
 const User = require("../models/User");
 const { auth, roleCheck } = require("../middleware/authMiddleware");
 const { getLocalDayKey } = require("../utils/dayKey");
@@ -9,15 +11,23 @@ const QRCode = require("qrcode");
 const { v4: uuidv4 } = require("uuid");
 const crypto = require("crypto");
 
+
 const router = express.Router();
 
+// ======================= HELPERS ======================= //
+
+function emitAttendanceUpdate(io, payload = {}) {
+  if (!io || !payload.courseId) return;
+
+  io.to(payload.courseId).emit("attendance-updated", {
+    courseId: payload.courseId,
+    sessionId: payload.sessionId,
+    source: payload.source || "manual"
+  });
+}
 
 
-// console.log("✅ sessionRoutes loaded");
 
-/* ----------------------------------------------------
-   🧠 Helper — Distance calculation
----------------------------------------------------- */
 function getDistanceInMeters(lat1, lng1, lat2, lng2) {
   const R = 6371000;
   const toRad = x => (x * Math.PI) / 180;
@@ -30,74 +40,84 @@ function getDistanceInMeters(lat1, lng1, lat2, lng2) {
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-/* ----------------------------------------------------
-   🧠 Helper — Mark absentees safely
----------------------------------------------------- */
 async function markAbsenteesForSession(session) {
-  const course = await Course.findById(session.course._id)
-    .populate("students", "_id")
-    .populate("semester");
+  console.log("[DEBUG] markAbsenteesForSession called for session:", session._id);
 
-  const allStudents = course.students.map(s => s._id.toString());
-  const dayKey = getLocalDayKey(session.createdAt);
+  const enrollments = await Enrollment.find({ course: session.course }).select("student");
+  console.log("[DEBUG] Enrolled students:", enrollments.map(e => e.student));
 
-  const presentStudents = await Attendance.find({
-    course: course._id,
-    dayKey,
+  const presentIds = await Attendance.find({
+    session: session._id,
     status: "Present"
   }).distinct("student");
+  console.log("[DEBUG] Present student IDs:", presentIds);
 
-  const absentees = allStudents.filter(s => !presentStudents.includes(s));
+  const enrolledIds = enrollments.map(e => e.student.toString());
+  const presentSet = new Set(presentIds.map(id => id.toString()));
+  const absentees = enrolledIds.filter(id => !presentSet.has(id));
+
+  console.log("[DEBUG] Absentees to mark:", absentees);
+
   if (!absentees.length) return;
 
-  const records = absentees.map(sid => ({
-    course: course._id,
-    student: sid,
+  const absenteesToMark = absentees.map(studentId => ({
+    course: session.course,
+    student: studentId,
+    semester: session.semester,
     session: session._id,
-    semester: course.semester,
     status: "Absent",
-    dayKey,
-    date: new Date(session.createdAt)
+    sessionType: session.type, // <- required field
+    dayKey: getLocalDayKey(session.createdAt || new Date()),
+    date: session.createdAt || new Date()
   }));
 
-  await Attendance.insertMany(records, { ordered: false });
-  console.log(`✅ Absentees marked for ${dayKey}: ${records.length}`);
+
+  try {
+    const result = await Attendance.insertMany(absenteesToMark);
+    console.log("[DEBUG] Absentees inserted:", result);
+  } catch (err) {
+    console.error("[ERROR] Failed to mark absentees:", err);
+  }
+
 }
 
-/* ----------------------------------------------------
-   🧠 Helper — End session (manual or auto)
----------------------------------------------------- */
-async function endSession(session) {
+
+async function endSession(session, io) {
   if (!session || session.status === "expired") return;
+
+  console.log("[DEBUG] Ending session:", session._id);
+
   session.status = "expired";
   session.expiresAt = new Date();
   await session.save();
+
   await markAbsenteesForSession(session);
+
+  // 🔥 Emit live update
+  emitAttendanceUpdate(io, {
+    courseId: session.course.toString(),
+    sessionId: session._id.toString(),
+    source: "auto-expire"
+  });
+
 }
 
-/* ----------------------------------------------------
-   🧠 Helper — Validate student before marking
----------------------------------------------------- */
+
+
 async function validateStudentForSession(studentId, session, location) {
-  const course = await Course.findById(session.course._id).populate("students", "_id");
+  const enrollment = await Enrollment.findOne({ course: session.course._id, student: studentId });
+  if (!enrollment) throw { status: 403, msg: "You are not enrolled in this course" };
 
-  if (!course.students.some(s => s._id.toString() === studentId)) {
-    throw { status: 403, msg: "You are not enrolled in this course" };
-  }
-
+  const course = await Course.findById(session.course._id);
   if (course.location?.lat && course.location?.lng) {
     if (!location) throw { status: 400, msg: "Location is required" };
-    if (location.accuracy && location.accuracy > 50) throw { status: 400, msg: "Location accuracy too low" };
+    if (location.accuracy && location.accuracy > 150) throw { status: 400, msg: "Location accuracy too low" };
     const distance = getDistanceInMeters(location.lat, location.lng, course.location.lat, course.location.lng);
     if (distance > course.location.radius) throw { status: 403, msg: "You are not within lecture location" };
   }
-
   return course;
 }
 
-/* ----------------------------------------------------
-   🧠 Helper — Rotate QR token
----------------------------------------------------- */
 async function rotateQrToken(session) {
   const newToken = crypto.randomBytes(12).toString("hex");
   session.validTokens = [{ token: newToken, expiresAt: new Date(Date.now() + 10 * 1000) }];
@@ -105,60 +125,44 @@ async function rotateQrToken(session) {
   return newToken;
 }
 
-/* ----------------------------------------------------
-   🧠 Helper — Auto-expire sessions (persistent)
----------------------------------------------------- */
-async function expireSessions() {
-  try {
-    const now = new Date();
-    const sessions = await Session.find({ status: "active", expiresAt: { $lte: now } });
+// Auto-expire active sessions
+async function expireSessions(io) {
+  const now = new Date();
+  const sessions = await Session.find({
+    status: "active",
+    expiresAt: { $lte: now }
+  });
 
-    for (const session of sessions) {
-      await endSession(session);
-      console.log(`⏰ Auto-expired session ${session._id}`);
-    }
-  } catch (err) {
-    console.error("Auto-expire error:", err.message);
+  for (const session of sessions) {
+    console.log("Auto-expiring session:", session._id);
+    await endSession(session, io);
   }
 }
 
-// Run every minute
-setInterval(expireSessions, 60 * 1000);
-expireSessions(); // run immediately on server start
+// Pass io from index.js
+const io = require("../index").io; // or however you export it
+setInterval(() => expireSessions(io), 60 * 1000);
+expireSessions(io);
 
 
-/* ----------------------------------------------------
-   ✅ GET active session
----------------------------------------------------- */
-router.get("/active/:courseId", auth, async (req, res) => {
-  try {
-    const session = await Session.findOne({
-      course: req.params.courseId,
-      status: "active",
-      expiresAt: { $gt: new Date() }
-    }).populate("course", "name code");
+// ======================= ROUTES ======================= //
 
-    if (!session) return res.json({ active: false });
-
-    res.json({
-      active: true,
-      session: {
-        _id: session._id,
-        token: session.token,
-        course: session.course,
-        expiresAt: session.expiresAt,
-        status: session.status
-      }
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ active: false, msg: "Server error" });
-  }
+// Student checks if already marked
+router.get("/check", auth, roleCheck(["student"]), async (req, res) => {
+  const { sessionId } = req.query;
+  const studentId = req.user.id;
+  const exists = await Attendance.findOne({ session: sessionId, student: studentId });
+  res.json({ alreadyMarked: !!exists });
 });
 
-/* ----------------------------------------------------
-   ✅ STUDENT scan (mark attendance)
----------------------------------------------------- */
+// Get active session for course
+router.get("/active/:courseId", auth, async (req, res) => {
+  const session = await Session.findOne({ course: req.params.courseId, status: "active", expiresAt: { $gt: new Date() } }).populate("course", "name code");
+  if (!session) return res.json({ active: false });
+  res.json({ active: true, session });
+});
+
+// Student scans QR
 router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
   try {
     const { token } = req.params;
@@ -172,21 +176,21 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
         { validTokens: { $elemMatch: { token, expiresAt: { $gt: new Date() } } } }
       ]
     }).populate("course");
-
     if (!session) return res.status(404).json({ msg: "Invalid or expired QR code" });
-    if (new Date() > new Date(session.expiresAt)) return res.status(400).json({ msg: "Session expired" });
+    if (new Date() > session.expiresAt) return res.status(400).json({ msg: "Session expired" });
 
-    const course = await validateStudentForSession(studentId, session, location);
+    await validateStudentForSession(studentId, session, location);
 
-    const dayKey = getLocalDayKey();
-    const alreadyMarked = await Attendance.findOne({ course: course._id, student: studentId, dayKey });
-    if (alreadyMarked) return res.status(200).json({ alreadyMarked: true, msg: "Attendance already marked", attendanceId: alreadyMarked._id });
+    const alreadyMarked = await Attendance.findOne({ session: session._id, student: studentId });
+    if (alreadyMarked) return res.status(409).json({ alreadyMarked: true, msg: "Already marked for this session" });
 
+    const dayKey = getLocalDayKey(new Date());
     const attendance = await Attendance.create({
-      course: course._id,
+      course: session.course._id,
       student: studentId,
+      semester: session.semester,
       session: session._id,
-      semester: course.semester,
+      sessionType: "QR",
       status: "Present",
       dayKey,
       date: new Date(),
@@ -194,108 +198,138 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
       gpsLocation: location ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy } : undefined
     });
 
+    const io = req.app.get("io");
+
+    emitAttendanceUpdate(io, {
+      courseId: session.course._id.toString(),
+      sessionId: session._id.toString(),
+      source: "qr"
+    });
+
+
     if (session.token === token) await rotateQrToken(session);
 
-    res.status(201).json({ alreadyMarked: false, msg: "Attendance recorded", attendanceId: attendance._id, sessionId: session._id, studentId });
+    res.status(201).json({ alreadyMarked: false, attendanceId: attendance._id, msg: "Attendance recorded" });
   } catch (err) {
-    console.error("SCAN ERROR:", err);
+    console.error(err);
     res.status(err.status || 500).json({ msg: err.msg || "Server error" });
   }
 });
 
-/* ----------------------------------------------------
-   ✅ TEACHER creates session
----------------------------------------------------- */
+// ======================= CREATE SESSIONS ======================= //
+
+// Teacher creates any session (QR/manual/rollcall)
 router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) => {
-  try {
-    const { courseId } = req.params;
-    const course = await Course.findById(courseId);
-    if (!course) return res.status(404).json({ msg: "Course not found" });
-    if (course.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
+  const { courseId } = req.params;
+  const { type } = req.body; // "QR" | "manual" | "rollcall"
 
-    await Session.updateMany({ course: courseId, expiresAt: { $gt: new Date() } }, { expiresAt: new Date(), status: "expired" });
+  // ✅ normalize & protect session type
+  const safeType = ["QR", "MANUAL", "ROLLCALL"].includes(type?.toUpperCase())
+    ? type.toUpperCase()
+    : "MANUAL";
 
-    const token = uuidv4();
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    const session = await Session.create({ course: courseId, teacher: req.user.id, token, expiresAt, status: "active", validTokens: [] });
 
+  const course = await Course.findById(courseId);
+  if (!course) return res.status(404).json({ msg: "Course not found" });
+  if (course.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
+
+  console.log("Creating session for course:", courseId, "semester:", course.semester, "type:", type);
+
+
+  // Expire previous sessions
+  const activeSessions = await Session.find({
+    course: courseId,
+    status: "active"
+  });
+
+  for (const s of activeSessions) {
+    await endSession(s); // ✅ marks absentees properly
+  }
+
+
+  const token = uuidv4(); // always generate
+
+  // ✅ ALL session types expire in 10 minutes
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+
+  const session = await Session.create({
+    course: courseId,
+    teacher: req.user.id,
+    semester: course.semester,
+    token,
+    expiresAt,
+    status: "active",
+    validTokens: [],
+    type: safeType
+  });
+
+  let qrImage = null;
+  if (type === "QR") {
     const qrData = `${process.env.FRONTEND_URL}/student/scan/${token}`;
-    const qrImage = await QRCode.toDataURL(qrData);
-
-    res.json({ msg: "Session created", token, qrImage, expiresAt, sessionId: session._id });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ msg: "Server error" });
+    qrImage = await QRCode.toDataURL(qrData);
   }
+
+  res.json({ msg: "Session created", token, qrImage, expiresAt, sessionId: session._id, type });
 });
 
-/* ----------------------------------------------------
-   🔁 TEACHER refresh QR
----------------------------------------------------- */
+// Teacher refresh QR
 router.post("/:sessionId/refresh", auth, roleCheck(["teacher"]), async (req, res) => {
-  try {
-    const session = await Session.findById(req.params.sessionId);
-    if (!session) return res.status(404).json({ msg: "Session not found" });
-    if (session.status === "expired" || new Date() > new Date(session.expiresAt)) return res.status(400).json({ msg: "Session expired" });
+  const session = await Session.findById(req.params.sessionId);
+  if (!session) return res.status(404).json({ msg: "Session not found" });
+  if (session.status === "expired") return res.status(400).json({ msg: "Session expired" });
 
-    const newToken = await rotateQrToken(session);
-    const qrData = `${process.env.FRONTEND_URL}/student/scan/${newToken}`;
-    const qrImage = await QRCode.toDataURL(qrData);
+  if (session.type !== "QR") return res.status(400).json({ msg: "Only QR sessions can refresh token" });
 
-    res.json({ msg: "QR refreshed", token: newToken, qrImage });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ msg: "Server error" });
-  }
+  const newToken = await rotateQrToken(session);
+  const qrData = `${process.env.FRONTEND_URL}/student/scan/${newToken}`;
+  const qrImage = await QRCode.toDataURL(qrData);
+
+  res.json({ msg: "QR refreshed", token: newToken, qrImage });
 });
 
-/* ----------------------------------------------------
-   ✅ TEACHER manually end session
----------------------------------------------------- */
+// Teacher manually end session
 router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) => {
-  try {
-    const session = await Session.findById(req.params.sessionId).populate("course");
-    if (!session) return res.status(404).json({ msg: "Session not found" });
-    if (session.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
-    if (session.status === "expired") return res.status(400).json({ msg: "Session already ended" });
+  const session = await Session.findById(req.params.sessionId);
+  if (!session) return res.status(404).json({ msg: "Session not found" });
+  if (session.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
 
-    await endSession(session);
-    res.json({ msg: "Session ended manually. Absentees marked." });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ msg: "Server error" });
-  }
+  const io = req.app.get("io"); // ✅ get socket instance
+  await endSession(session, io);
+
+  res.json({ msg: "Session ended manually. Absentees marked." });
 });
 
 
-/* ----------------------------------------------------
-   ✅ STUDENT get face descriptor
----------------------------------------------------- */
-router.get("/:token/student", auth, async (req, res) => {
-  try {
-    const session = await Session.findOne({ token: req.params.token });
-    if (!session) return res.status(404).json({ msg: "Session not found" });
+// ======================= STUDENT FACE DESCRIPTOR =======================
 
-    const student = await User.findById(req.user.id);
-    if (!student?.faceDescriptor?.length) return res.status(400).json({ msg: "Face descriptor missing" });
+router.get("/:token/student", auth, roleCheck(["student"]), async (req, res) => {
+  const session = await Session.findOne({
+    $or: [
+      { token: req.params.token },
+      { validTokens: { $elemMatch: { token: req.params.token, expiresAt: { $gt: new Date() } } } }
+    ]
+  });
 
-    res.json({ sessionId: session._id, studentFaceDescriptor: student.faceDescriptor });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ msg: "Server error" });
-  }
+  if (!session) return res.status(404).json({ msg: "Session not found" });
+
+  const student = await User.findById(req.user.id);
+  if (!student?.faceDescriptor?.length) return res.status(400).json({ msg: "Face descriptor missing" });
+
+  res.json({ sessionId: session._id, studentFaceDescriptor: student.faceDescriptor });
 });
 
-
-
-/* ----------------------------------------------------
-   ✅ LECTURER view session
----------------------------------------------------- */
+// ======================= GET SESSION BY TOKEN (generic) =======================
 router.get("/:token", auth, async (req, res) => {
   try {
-    const session = await Session.findOne({ token: req.params.token }).populate({
+    const session = await Session.findOne({
+      $or: [
+        { token: req.params.token },
+        { validTokens: { $elemMatch: { token: req.params.token, expiresAt: { $gt: new Date() } } } }
+      ]
+    }).populate({
       path: "course",
-      populate: { path: "teacher", select: "name email role" }
+      populate: { path: "teacher", select: "name email role location radius" }
     });
 
     if (!session) return res.status(404).json({ msg: "Session not found" });
@@ -307,13 +341,8 @@ router.get("/:token", auth, async (req, res) => {
   }
 });
 
-
-
-
-
-/* ----------------------------------------------------
-   🔹 Export
----------------------------------------------------- */
 module.exports = router;
 module.exports.markAbsenteesForSession = markAbsenteesForSession;
 module.exports.endSession = endSession;
+module.exports.emitAttendanceUpdate = emitAttendanceUpdate;
+
