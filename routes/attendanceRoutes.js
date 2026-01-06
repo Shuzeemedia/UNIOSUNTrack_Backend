@@ -100,10 +100,21 @@ async function getStudentAttendance(
   /**
    * 1️⃣ STUDENT ATTENDANCE RECORDS
    */
+  const enrollment = await Enrollment.findOne({
+    course: courseId,
+    student: studentId,
+  });
+
+  if (!enrollment) {
+    throw { status: 400, msg: "Not enrolled in course" };
+  }
+
   const attendanceFilter = {
     course: courseId,
     student: studentId,
+    semester: enrollment.semester, // ✅ FIX
   };
+
 
   if (sessionId) {
     attendanceFilter.session = sessionId;
@@ -302,32 +313,23 @@ router.post("/", auth, roleCheck(["admin"]), async (req, res) => {
 // Admin: bulk mark
 router.post("/bulk-mark", auth, roleCheck(["admin"]), async (req, res) => {
   try {
-    const { courseId, status = "Present", date, sessionId } = req.body;
-
+    const { courseId, status = "Present", sessionId } = req.body;
     if (!courseId || !sessionId) {
       return res.status(400).json({ msg: "courseId and sessionId required" });
     }
 
     const session = await validateSessionCourse(sessionId, courseId);
-
-
     const enrollments = await Enrollment.find({ course: courseId });
 
     const records = [];
-
     for (const enr of enrollments) {
       const attendance = await Attendance.findOneAndUpdate(
+        { course: courseId, student: enr.student, session: sessionId, semester: enr.semester },
         {
           course: courseId,
-          semester: enr.semester,
           student: enr.student,
           session: sessionId,
-        },
-        {
-          course: courseId,
           semester: enr.semester,
-          student: enr.student,
-          session: sessionId,
           sessionType: session.type || "MANUAL",
           status,
           date: session.createdAt,
@@ -335,24 +337,17 @@ router.post("/bulk-mark", auth, roleCheck(["admin"]), async (req, res) => {
         },
         { new: true, upsert: true }
       );
-
       records.push(attendance);
     }
 
-    const io = req.app.get("io");
-
-    emitAttendanceUpdate(io, {
-      courseId,
-      sessionId,
-      source: "admin-bulk"
-    });
-
-
+    emitAttendanceUpdate(req.app.get("io"), { courseId, sessionId, source: "admin-bulk" });
     res.json({ msg: "Bulk attendance saved", records });
+
   } catch (err) {
     res.status(500).json({ msg: err.message || "Server error" });
   }
 });
+
 
 
 // Admin summary
@@ -419,7 +414,7 @@ router.get("/admin/summary/:courseId", auth, roleCheck(["admin"]), async (req, r
 router.post("/:courseId/mark/:studentId", auth, roleCheck(["teacher"]), async (req, res) => {
   try {
     const { courseId, studentId } = req.params;
-    const { status = "Present", date, sessionId } = req.body;
+    const { status = "Present", sessionId } = req.body;
 
     if (!sessionId) {
       return res.status(400).json({ msg: "sessionId is required" });
@@ -429,20 +424,17 @@ router.post("/:courseId/mark/:studentId", auth, roleCheck(["teacher"]), async (r
     const session = await validateSessionCourse(sessionId, courseId);
 
     const enrollment = await Enrollment.findOne({ course: courseId, student: studentId });
-    if (!enrollment) return res.status(400).json({ msg: "Student not enrolled" });
+    if (!enrollment) {
+      return res.status(400).json({ msg: "Student not enrolled" });
+    }
 
     const attendance = await Attendance.findOneAndUpdate(
+      { course: courseId, student: studentId, session: sessionId, semester: enrollment.semester },
       {
         course: courseId,
-        semester: enrollment.semester,
         student: studentId,
         session: sessionId,
-      },
-      {
-        course: courseId,
         semester: enrollment.semester,
-        student: studentId,
-        session: sessionId,
         sessionType: session.type || "MANUAL",
         status,
         date: session.createdAt,
@@ -451,76 +443,63 @@ router.post("/:courseId/mark/:studentId", auth, roleCheck(["teacher"]), async (r
       { new: true, upsert: true }
     );
 
-    const io = req.app.get("io");
-
-    emitAttendanceUpdate(io, {
-      courseId,
-      sessionId,
-      source: "teacher-single"
-    });
-
-
+    emitAttendanceUpdate(req.app.get("io"), { courseId, sessionId, source: "teacher-single" });
     res.json({ msg: "Attendance saved", attendance });
+
   } catch (err) {
     res.status(500).json({ msg: err.message || "Server error" });
   }
 });
 
 
+
+
+
 // Teacher: bulk mark
 router.post("/:courseId/mark", auth, roleCheck(["teacher"]), async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { records, date, sessionId } = req.body;
+    const { records, sessionId } = req.body;
 
-    if (!Array.isArray(records)) {
-      return res.status(400).json({ msg: "Records required" });
+    if (!Array.isArray(records) || !sessionId) {
+      return res.status(400).json({ msg: "Valid records array and sessionId required" });
     }
 
     await verifyTeacherCourse(courseId, req.user.id);
     const session = await validateSessionCourse(sessionId, courseId);
 
-
     const saved = [];
-
     for (const r of records) {
+      const enrollment = await Enrollment.findOne({ course: courseId, student: r.studentId });
+      if (!enrollment) continue;
+
       const attendance = await Attendance.findOneAndUpdate(
-        {
-          course: courseId,
-          student: r.studentId,
-          session: sessionId, // ✅ ONLY session
-        },
+        { course: courseId, student: r.studentId, session: sessionId, semester: enrollment.semester },
         {
           course: courseId,
           student: r.studentId,
           session: sessionId,
+          semester: enrollment.semester,
           sessionType: session.type || "MANUAL",
           status: r.status || "Present",
-          date: session.createdAt, // ✅ session time
+          date: session.createdAt,
           markedBy: req.user.id,
         },
         { new: true, upsert: true }
       );
-
-
       saved.push(attendance);
     }
 
-
-    const io = req.app.get("io");
-
-    emitAttendanceUpdate(io, {
-      courseId,
-      sessionId,
-      source: "teacher-bulk"
-    });
-
-
+    emitAttendanceUpdate(req.app.get("io"), { courseId, sessionId, source: "teacher-bulk" });
     res.json({ msg: "Bulk attendance saved", records: saved });
+
   } catch (err) {
-    res.status(500).json({ msg: "Server error", error: err.message });
+    res.status(500).json({ msg: err.message || "Server error" });
   }
 });
+
+
+
 
 
 // Teacher summary (with attendancePct and score)
@@ -532,15 +511,19 @@ router.get("/:courseId/summary", auth, roleCheck(["teacher"]), async (req, res) 
     const course = await Course.findById(courseId);
     if (!course) return res.status(404).json({ msg: "Course not found" });
 
+    const totalPlanned =
+      typeof course.totalClasses === "number"
+        ? course.totalClasses
+        : 0;
+
+
     const match = { course: new mongoose.Types.ObjectId(courseId) };
 
-    // Apply date filter only if specified
     if (filter && filter !== "all") {
       const dateRange = buildDateRangeFilter({ date, range, filter });
       if (dateRange) match.date = dateRange;
     }
 
-    // Aggregate attendance per student
     const summary = await Attendance.aggregate([
       { $match: match },
       {
@@ -552,21 +535,23 @@ router.get("/:courseId/summary", auth, roleCheck(["teacher"]), async (req, res) 
       }
     ]);
 
-    // Total classes held in this period
-    const classesHeld = await Attendance.distinct("session", match).then(s => s.length);
+    const classesHeld = await Attendance
+      .distinct("session", match)
+      .then(s => s.length);
 
-    // Build full student summary with attendancePct and score
     const populatedSummary = await Promise.all(
       summary.map(async s => {
-        const student = await User.findById(s._id).select("name email studentId profileImage department");
+        const student = await User.findById(s._id)
+          .select("name email studentId profileImage department");
 
         const totalPresent = s.present;
         const totalAbsent = s.absent;
-        const totalClasses = classesHeld;
+        const totalSessions = totalPresent + totalAbsent;
 
-        const attendancePct = totalClasses > 0 ? (totalPresent / totalClasses) * 100 : 0;
+        const attendancePct =
+          totalSessions > 0 ? (totalPresent / totalSessions) * 100 : 0;
 
-        // XP Score based on course.totalClasses
+        // ✅ FIXED HERE
         const totalPlanned = course.totalClasses || 0;
         const rawScore = totalPlanned > 0 ? (totalPresent / totalPlanned) * 10 : 0;
         const score = Math.floor(rawScore * 100) / 100;
@@ -582,10 +567,10 @@ router.get("/:courseId/summary", auth, roleCheck(["teacher"]), async (req, res) 
           },
           present: totalPresent,
           absent: totalAbsent,
-          classesHeld: totalClasses,
+          classesHeld,
           totalPlanned,
           attendancePct: Number(attendancePct.toFixed(1)),
-          score: Number(score.toFixed(2))
+          score: Number(score.toFixed(2)),
         };
       })
     );
@@ -600,7 +585,10 @@ router.get("/:courseId/summary", auth, roleCheck(["teacher"]), async (req, res) 
     });
 
   } catch (err) {
-    res.status(500).json({ msg: "Failed to fetch summary", error: err.message });
+    res.status(500).json({
+      msg: "Failed to fetch summary",
+      error: err.message
+    });
   }
 });
 
