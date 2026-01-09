@@ -42,7 +42,7 @@ const courseSchema = new mongoose.Schema(
     location: {
       lat: { type: Number },
       lng: { type: Number },
-      radius: { type: Number, default: 100 }, // meters
+      radius: { type: Number, default: 20 }, // meters
     },
 
   },
