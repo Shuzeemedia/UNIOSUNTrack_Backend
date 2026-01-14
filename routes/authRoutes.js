@@ -475,6 +475,10 @@ router.get("/me", auth, async (req, res) => {
                 faceDescriptor: Array.isArray(user.faceDescriptor)
                     ? user.faceDescriptor
                     : [],
+
+                graduated: user.graduated || false,
+                graduationDate: user.graduationDate || null,
+
             },
         });
 

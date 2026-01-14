@@ -1,19 +1,20 @@
 // routes/session.js
 const express = require("express");
 const router = express.Router();
+const mongoose = require("mongoose");
 
 const SessionX = require("../models/SessionX");
 const Semester = require("../models/Semester");
 const User = require("../models/User");
 const Course = require("../models/Course");
-const Department = require("../models/Department");
 const Attendance = require("../models/Attendance");
+const Enrollment = require("../models/Enrollment");
+
 
 // ARCHIVE MODELS
 const AttendanceArchive = require("../models/AttendanceArchive");
 const CourseArchive = require("../models/CourseArchive");
 const LeaderboardArchive = require("../models/LeaderboardArchive");
-
 
 // ===========================================================
 // GET ALL SESSIONS
@@ -27,8 +28,6 @@ router.get("/", async (req, res) => {
     }
 });
 
-
-
 // ===========================================================
 // CREATE NEW SESSION (ARCHIVE → RESET → PROMOTE)
 // ===========================================================
@@ -36,11 +35,11 @@ router.post("/create", async (req, res) => {
     const { name, startDate, endDate } = req.body;
 
     try {
-        // 1️⃣ Get the currently active session before deactivation (for archiving)
+        // 1️⃣ Get active session
         const oldSession = await SessionX.findOne({ active: true });
         const sessionName = oldSession ? oldSession.name : "Unknown Session";
 
-        // 2️⃣ Deactivate all previous sessions
+        // 2️⃣ Deactivate old sessions
         await SessionX.updateMany({}, { active: false });
 
         // 3️⃣ Create new session
@@ -51,69 +50,72 @@ router.post("/create", async (req, res) => {
             active: true
         });
 
-        // 4️⃣ Ensure an active semester exists
+        // 4️⃣ Ensure active semester exists
         const activeSemester = await Semester.findOne({ active: true });
         if (!activeSemester) throw new Error("No active semester found");
 
         // 5️⃣ Fetch students
-        const students = await User.find({ role: "student" }).populate("department");
+        const students = await User.find({
+            role: "student",
+            graduated: { $ne: true }
+        }).populate("department");
+
         const studentIds = students.map(s => s._id);
 
-
-
         // ===========================================================
-        // 📦 ARCHIVE ATTENDANCE (for each attendance record)
+        // 📦 ARCHIVE ATTENDANCE (NO TRANSACTIONS)
         // ===========================================================
-        try {
-            const allAttendance = await Attendance.find();
+        const allAttendance = await Attendance.find();
 
-            if (allAttendance.length > 0) {
-                const formatted = allAttendance.map(a => ({
-                    session: sessionName,
-                    studentId: a.studentId,
-                    courseId: a.courseId,
-                    date: a.date,
-                    status: a.status // present or absent
-                }));
-
-                await AttendanceArchive.insertMany(formatted);
-            }
-        } catch (err) {
-            console.error("Attendance archive error:", err);
-        }
-
-
-
-        // ===========================================================
-        // 📦 ARCHIVE COURSE INFO (code, title, teacher, students, analytics)
-        // ===========================================================
-        try {
-            const allCourses = await Course.find();
-
-            const formatted = allCourses.map(c => ({
-                session: sessionName,
-                courseId: c._id,
-                courseCode: c.courseCode,
-                courseTitle: c.courseTitle,
-                teacher: c.teacher,
-                students: c.students,
-                attendanceSummary: c.attendanceSummary,
-                totalAttendanceCount: c.attendanceCount
+        if (allAttendance.length > 0 && oldSession) {
+            const formattedAttendance = allAttendance.map(a => ({
+                course: a.course,
+                student: a.student,
+                semester: a.semester,
+                session: a.session,
+                academicSession: oldSession._id,
+                sessionType: a.sessionType,
+                status: a.status,
+                markedBy: a.markedBy,
+                faceVerified: a.faceVerified,
+                rollCallMode: a.rollCallMode,
+                date: a.date
             }));
 
-            await CourseArchive.insertMany(formatted);
-        } catch (err) {
-            console.error("Course archive error:", err);
+            await AttendanceArchive.insertMany(formattedAttendance);
         }
 
-
+        await Attendance.deleteMany({});
 
         // ===========================================================
-        // 📦 ARCHIVE LEADERBOARD DATA
+        // 📦 ARCHIVE COURSES (NO TRANSACTIONS)
         // ===========================================================
-        try {
+        const allCourses = await Course.find();
+
+        if (allCourses.length > 0 && oldSession) {
+            const formattedCourses = allCourses.map(c => ({
+                session: oldSession._id, // ✅ IMPORTANT FIX
+                courseId: c._id,
+                courseCode: c.code,
+                courseTitle: c.name,
+                teacher: c.teacher,
+                students: c.students,
+                totalClasses: c.totalClasses,
+                unit: c.unit,
+                semester: c.semester,
+                createdAt: new Date()
+            }));
+
+            await CourseArchive.insertMany(formattedCourses);
+        }
+
+        // ===========================================================
+        // 📦 ARCHIVE LEADERBOARD
+        // ===========================================================
+        if (oldSession) {
             const leaderboardData = students.map(s => ({
                 session: sessionName,
+                academicSession: oldSession._id, // tie leaderboard to old session
                 student: s._id,
                 totalPresent: s.totalPresent || 0,
                 totalAbsent: s.totalAbsent || 0,
@@ -121,35 +123,16 @@ router.post("/create", async (req, res) => {
             }));
 
             await LeaderboardArchive.insertMany(leaderboardData);
-        } catch (err) {
-            console.error("Leaderboard archive error:", err);
         }
-
-
 
         // ===========================================================
         // 🧹 CLEAR CURRENT SESSION DATA
         // ===========================================================
-
-        // Unenroll all students from courses
         await Course.updateMany(
             { students: { $in: studentIds } },
             { $pull: { students: { $in: studentIds } } }
         );
 
-        // Recalculate student count
-        const coursesAfterUpdate = await Course.find();
-        for (let c of coursesAfterUpdate) {
-            c.studentsCount = c.students.length;
-            c.attendanceSummary = [];
-            c.attendanceCount = 0;
-            await c.save();
-        }
-
-        // Clear attendance table
-        await Attendance.deleteMany({});
-
-        // Reset student leaderboard fields
         await User.updateMany(
             { role: "student" },
             {
@@ -162,43 +145,58 @@ router.post("/create", async (req, res) => {
             }
         );
 
+        // ===========================================================
+        // 🧹 CLEAR ENROLLMENTS (IMPORTANT: removes old courses from dashboard)
+        // ===========================================================
+        await Enrollment.deleteMany({
+            student: { $in: studentIds },
+        });
 
 
         // ===========================================================
-        // 🎓 PROMOTE STUDENTS
+        // 🎓 PROMOTE STUDENTS AND GRADUATE FINAL-YEAR
         // ===========================================================
-        for (let student of students) {
-            if (student.department?.levels?.length) {
-                const maxLevel = Math.max(...student.department.levels);
-                let newLevel = student.level + 100;
+        for (const student of students) {
+            if (!student.department?.levels?.length) continue;
 
-                if (newLevel > maxLevel) newLevel = maxLevel;
+            const maxLevel = Math.max(...student.department.levels);
 
-                student.level = newLevel;
+            if (student.level >= maxLevel) {
+                // 🎓 Graduate student
+                student.graduated = true;
+                student.graduationDate = new Date();
+                student.level = maxLevel;
+            } else {
+                // ⬆️ Promote student
+                student.level += 100;
             }
 
+            // Reset per-session stats
             student.courses = [];
+            student.totalPresent = 0;
+            student.totalAbsent = 0;
+            student.attendancePercentage = 0;
+
             await student.save();
         }
-
 
 
         // ===========================================================
         // DONE
         // ===========================================================
         res.json({
-            msg: "New session started successfully. Old data archived, students promoted, and system cleared.",
+            msg: "New session started successfully. Old data archived, students promoted, and system reset.",
             session: newSession
         });
 
     } catch (err) {
         console.error("Start new session error:", err);
-        res.status(500).json({ msg: "Failed to start new session", error: err.message });
+        res.status(500).json({
+            msg: "Failed to start new session",
+            error: err.message
+        });
     }
 });
-
-
-
 
 // ===========================================================
 // DELETE SESSION
@@ -208,11 +206,9 @@ router.delete("/:id", async (req, res) => {
         await SessionX.findByIdAndDelete(req.params.id);
         res.json({ msg: "Session deleted" });
     } catch (err) {
-        res.status(500).json({ msg: "Failed to delete session", error: err.message });
+        res.status(500).json({ msg: "Failed to delete session" });
     }
 });
-
-
 
 // ===========================================================
 // UPDATE SESSION
@@ -222,11 +218,9 @@ router.put("/:id", async (req, res) => {
         const updated = await SessionX.findByIdAndUpdate(req.params.id, req.body, { new: true });
         res.json({ msg: "Session updated", session: updated });
     } catch (err) {
-        res.status(500).json({ msg: "Failed to update session", error: err.message });
+        res.status(500).json({ msg: "Failed to update session" });
     }
 });
-
-
 
 // ===========================================================
 // ACTIVATE SESSION
@@ -234,10 +228,14 @@ router.put("/:id", async (req, res) => {
 router.patch("/:id/activate", async (req, res) => {
     try {
         await SessionX.updateMany({}, { active: false });
-        const session = await SessionX.findByIdAndUpdate(req.params.id, { active: true }, { new: true });
+        const session = await SessionX.findByIdAndUpdate(
+            req.params.id,
+            { active: true },
+            { new: true }
+        );
         res.json({ msg: "Session activated", session });
     } catch (err) {
-        res.status(500).json({ msg: "Failed to activate session", error: err.message });
+        res.status(500).json({ msg: "Failed to activate session" });
     }
 });
 

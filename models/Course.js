@@ -38,13 +38,6 @@ const courseSchema = new mongoose.Schema(
       default: 3,
     },
 
-    // GPS location where attendance is allowed
-    location: {
-      lat: { type: Number },
-      lng: { type: Number },
-      radius: { type: Number, default: 20 }, // meters
-    },
-
   },
   { timestamps: true }
 );

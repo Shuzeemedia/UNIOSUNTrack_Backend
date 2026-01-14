@@ -9,7 +9,7 @@ const Enrollment = require("../models/Enrollment");
 const User = require("../models/User");
 const Session = require("../models/Session");
 
-const { auth, roleCheck } = require("../middleware/authMiddleware");
+const { auth, roleCheck, studentOnly } = require("../middleware/authMiddleware");
 const { emitAttendanceUpdate } = require("./sessionRoutes");
 // adjust path if your folders differ
 
@@ -181,7 +181,7 @@ async function getStudentAttendance(
 // ======================= ROUTES ======================= //
 
 // ---------- STUDENT ----------
-router.get("/my-summary/:courseId", auth, roleCheck(["student"]), async (req, res) => {
+router.get("/my-summary/:courseId", auth, studentOnly(), async (req, res) => {
   try {
     const { courseId } = req.params;
     const studentId = req.user.id;

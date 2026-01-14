@@ -8,6 +8,21 @@ const UserSchema = new mongoose.Schema(
     studentId: { type: String, unique: true, sparse: true },
     department: { type: mongoose.Schema.Types.ObjectId, ref: "Department" },
     level: { type: Number },
+    graduated: {
+      type: Boolean,
+      default: false,
+    },
+    
+    graduationDate: {
+      type: Date,
+    },
+
+    graduationVerified: {
+      type: Boolean,
+      default: false,
+    },
+    
+    
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     role: {

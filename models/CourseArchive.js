@@ -5,6 +5,7 @@ const CourseArchiveSchema = new mongoose.Schema({
   courseId: { type: mongoose.Schema.Types.ObjectId, ref: "Course" },
   courseCode: String,
   courseTitle: String,
+  unit: Number,
   teacher: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   students: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
   attendanceSummary: Array,

@@ -3,7 +3,8 @@ const Course = require("../models/Course");
 const Department = require("../models/Department");
 const Semester = require("../models/Semester");
 const Enrollment = require("../models/Enrollment");
-const { auth, roleCheck } = require("../middleware/authMiddleware");
+const { auth, roleCheck, studentOnly } = require("../middleware/authMiddleware");
+
 
 const router = express.Router();
 
@@ -83,7 +84,7 @@ router.post("/create", auth, roleCheck(["admin"]), async (req, res) => {
 });
 
 /// ======================= STUDENT REGISTER / SELF-ENROLL ======================= ///
-router.post("/:courseId/register", auth, roleCheck(["student"]), async (req, res) => {
+router.post("/:courseId/register", auth, studentOnly(), async (req, res) => {
     try {
         const activeSem = await getActiveSemesterDoc();
 
@@ -99,7 +100,7 @@ router.post("/:courseId/register", auth, roleCheck(["student"]), async (req, res
     }
 });
 
-router.post("/:courseId/self-enroll", auth, roleCheck(["student"]), async (req, res) => {
+router.post("/:courseId/self-enroll", auth, studentOnly(), async (req, res) => {
     try {
         const activeSem = await getActiveSemesterDoc();
         const course = await Course.findById(req.params.courseId);
@@ -129,7 +130,7 @@ router.post("/:courseId/self-enroll", auth, roleCheck(["student"]), async (req, 
 });
 
 /// ======================= STUDENT ENROLLED & AVAILABLE COURSES ======================= ///
-router.get("/enrolled", auth, roleCheck(["student"]), async (req, res) => {
+router.get("/enrolled", auth, studentOnly(), async (req, res) => {
     try {
         const activeSem = await getActiveSemesterDoc();
         const enrollments = await Enrollment.find({ student: req.user.id, semester: activeSem._id })
@@ -149,7 +150,7 @@ router.get("/enrolled", auth, roleCheck(["student"]), async (req, res) => {
     }
 });
 
-router.get("/available", auth, roleCheck(["student"]), async (req, res) => {
+router.get("/available", auth, studentOnly(), async (req, res) => {
     try {
         const activeSem = await getActiveSemesterDoc();
 
@@ -316,52 +317,7 @@ router.delete("/:id", auth, roleCheck(["admin"]), async (req, res) => {
     }
 });
 
-/// ======================= ADMIN ENROLL / UNENROLL STUDENT ======================= ///
-router.post("/:courseId/enroll", auth, roleCheck(["admin"]), async (req, res) => {
-    try {
-        const { studentId } = req.body;
-        if (!studentId) return res.status(400).json({ msg: "studentId required" });
 
-        const activeSem = await getActiveSemesterDoc();
-
-        const existing = await Enrollment.findOne({
-            student: studentId,
-            course: req.params.courseId,
-            semester: activeSem._id,
-        });
-
-        if (!existing) {
-            await Enrollment.create({
-                student: studentId,
-                course: req.params.courseId,
-                semester: activeSem._id,
-            });
-        }
-
-        res.json({ msg: "Student enrolled successfully" });
-    } catch (err) {
-        res.status(500).json({ msg: err.message });
-    }
-});
-
-router.post("/:courseId/unenroll", auth, roleCheck(["admin"]), async (req, res) => {
-    try {
-        const { studentId } = req.body;
-        if (!studentId) return res.status(400).json({ msg: "studentId required" });
-
-        const activeSem = await getActiveSemesterDoc();
-
-        await Enrollment.findOneAndDelete({
-            student: studentId,
-            course: req.params.courseId,
-            semester: activeSem._id,
-        });
-
-        res.json({ msg: "Student unenrolled successfully" });
-    } catch (err) {
-        res.status(500).json({ msg: err.message });
-    }
-});
 
 /// ======================= ADMIN UNASSIGN LECTURER ======================= ///
 router.post("/:courseId/unassign-lecturer", auth, roleCheck(["admin"]), async (req, res) => {

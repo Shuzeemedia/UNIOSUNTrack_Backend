@@ -7,7 +7,7 @@ const sessionSchema = new mongoose.Schema({
     required: true,
   },
 
-  
+
 
   // semester
   semester: {
@@ -25,10 +25,10 @@ const sessionSchema = new mongoose.Schema({
   // The main session token (used for session reference)
   token: {
     type: String,
-    required: function() { return this.type === "QR"; }, // ✅ required only for QR
+    required: function () { return this.type === "QR"; }, // ✅ required only for QR
     unique: true,
   },
-  
+
 
   // When the session itself expires (10 mins after creation)
   expiresAt: {
@@ -42,13 +42,20 @@ const sessionSchema = new mongoose.Schema({
     required: true,
     set: v => v.toUpperCase(),
   },
-  
+
 
   status: {
     type: String,
     enum: ["active", "expired"],
     default: "active",
   },
+
+  location: {
+    lat: { type: Number, required: true },
+    lng: { type: Number, required: true },
+    radius: { type: Number, default: 60 }
+  },
+
 
   // Store the rotating QR tokens (each valid for ~10 seconds)
   validTokens: [
@@ -59,7 +66,7 @@ const sessionSchema = new mongoose.Schema({
   ],
 
 },
-{ timestamps: true }
+  { timestamps: true }
 );
 
 // Clean expired QR tokens automatically

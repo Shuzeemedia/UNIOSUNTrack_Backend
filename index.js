@@ -16,6 +16,8 @@ const profileRoutes = require("./routes/profile");
 const semestersRouter = require("./routes/semesters");
 const sessionX = require("./routes/session");
 const settingsRoutes = require("./routes/settings");
+const alumniRoutes = require("./routes/alumni");
+const adminGraduation = require("./routes/adminGraduation");
 
 
 // store socket instance so routes can use it
@@ -57,6 +59,11 @@ app.use("/api/semesters", semestersRouter);
 // existing API prefix
 app.use("/api/session", sessionX);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/alumni", alumniRoutes);
+app.use("/api/admin", adminGraduation);
+
+
+
 
 
 // === ADD SOCKET + HTTP SERVER HERE ===

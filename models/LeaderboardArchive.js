@@ -1,7 +1,8 @@
 const mongoose = require("mongoose");
 
 const LeaderboardArchiveSchema = new mongoose.Schema({
-  session: String,
+  session: String, // session name
+  academicSession: { type: mongoose.Schema.Types.ObjectId, ref: "SessionX" }, // reference to old session
   student: { type: mongoose.Schema.Types.ObjectId, ref: "User" },
   totalPresent: Number,
   totalAbsent: Number,

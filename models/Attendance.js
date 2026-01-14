@@ -57,6 +57,7 @@ const AttendanceSchema = new mongoose.Schema(
     date: {
       type: Date,
       required: true,
+      immutable: true,
     },
   },
   { timestamps: true }

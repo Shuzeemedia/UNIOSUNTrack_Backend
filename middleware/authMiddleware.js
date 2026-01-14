@@ -66,4 +66,21 @@ function roleCheck(allowedRoles = []) {
   };
 }
 
-module.exports = { auth, roleCheck };
+function studentOnly(allowGraduated = false) {
+  return (req, res, next) => {
+    if (!req.user) return res.status(401).json({ msg: "Unauthorized" });
+    if (req.user.role !== "student") return res.status(403).json({ msg: "Access denied" });
+
+    if (!allowGraduated && req.user.graduated) {
+      return res.status(403).json({
+        msg: "You have graduated. This action is no longer permitted.",
+        code: "STUDENT_GRADUATED",
+      });
+    }
+
+    next();
+  };
+}
+
+module.exports = { auth, roleCheck, studentOnly };
+

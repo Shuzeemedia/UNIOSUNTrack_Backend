@@ -5,7 +5,8 @@ const Attendance = require("../models/Attendance");
 const Course = require("../models/Course");
 const Enrollment = require("../models/Enrollment");
 const User = require("../models/User");
-const { auth, roleCheck } = require("../middleware/authMiddleware");
+const { auth, roleCheck, studentOnly } = require("../middleware/authMiddleware");
+
 
 const QRCode = require("qrcode");
 const { v4: uuidv4 } = require("uuid");
@@ -42,30 +43,38 @@ function getDistanceInMeters(lat1, lng1, lat2, lng2) {
 
 // unchanged
 async function markAbsenteesForSession(session) {
+  // 1️⃣ Get all enrolled students
   const enrollments = await Enrollment.find({ course: session.course })
     .select("student semester");
 
-  const ops = enrollments.map(e => ({
-    updateOne: {
-      filter: {
-        course: session.course,
-        semester: e.semester,
-        student: e.student,
-        session: session._id,
-      },
-      update: {
-        $setOnInsert: {
-          status: "Absent",
-          sessionType: session.type,
-          date: session.createdAt,
-        }
-      },
-      upsert: true
-    }
-  }));
+  // 2️⃣ Get students already marked (Present or Absent)
+  const alreadyMarked = await Attendance.find({
+    session: session._id
+  }).select("student");
 
-  await Attendance.bulkWrite(ops);
+  const markedStudentIds = new Set(
+    alreadyMarked.map(a => a.student.toString())
+  );
+
+  // 3️⃣ Build absent records ONLY for unmarked students
+  const absentees = enrollments
+    .filter(e => !markedStudentIds.has(e.student.toString()))
+    .map(e => ({
+      course: session.course,
+      student: e.student,
+      semester: e.semester,
+      session: session._id,
+      sessionType: session.type,
+      status: "Absent",
+      date: session.createdAt,
+    }));
+
+  // 4️⃣ Insert absentees
+  if (absentees.length > 0) {
+    await Attendance.insertMany(absentees);
+  }
 }
+
 
 
 
@@ -103,18 +112,94 @@ async function endSession(session, io) {
 
 
 async function validateStudentForSession(studentId, session, location) {
-  const enrollment = await Enrollment.findOne({ course: session.course._id, student: studentId });
-  if (!enrollment) throw { status: 403, msg: "You are not enrolled in this course" };
+  // 1️⃣ Check enrollment
+  const enrollment = await Enrollment.findOne({
+    course: session.course._id,
+    student: studentId
+  });
 
-  const course = await Course.findById(session.course._id);
-  if (course.location?.lat && course.location?.lng) {
-    if (!location) throw { status: 400, msg: "Location is required" };
-    if (location.accuracy && location.accuracy > 150) throw { status: 400, msg: "Location accuracy too low" };
-    const distance = getDistanceInMeters(location.lat, location.lng, course.location.lat, course.location.lng);
-    if (distance > course.location.radius) throw { status: 403, msg: "You are not within lecture location" };
+  if (!enrollment) {
+    throw { status: 403, msg: "You are not enrolled in this course" };
   }
-  return course;
+
+  // 2️⃣ If session has GPS restriction
+  if (session.location?.lat && session.location?.lng) {
+
+    // Location must be sent
+    if (!location) {
+      throw { status: 400, msg: "Location is required" };
+    }
+
+
+    // 🔵 Normalize STUDENT GPS
+    const studentLat = Number(location.lat);
+    const studentLng = Number(location.lng);
+
+    const accuracy = Number(location.accuracy);
+
+    // Block fake GPS / IP-based spoofing
+    if (!Number.isFinite(accuracy)) {
+      throw { status: 400, msg: "GPS accuracy missing" };
+    }
+
+    // Reject network / VPN / IP geolocation
+    if (accuracy > 300) {
+      throw {
+        status: 403,
+        msg: "GPS signal too weak. Enable precise location and move outdoors."
+      };
+    }
+
+
+    if (!Number.isFinite(studentLat) || !Number.isFinite(studentLng)) {
+      throw { status: 400, msg: "Invalid GPS coordinates" };
+    }
+
+    // 🔵 Normalize SESSION GPS
+    const sessionLat = Number(session.location.lat);
+    const sessionLng = Number(session.location.lng);
+    const sessionRadius = Number(session.location.radius) || 60;
+
+    if (!Number.isFinite(sessionLat) || !Number.isFinite(sessionLng)) {
+      throw { status: 500, msg: "Session location corrupted" };
+    }
+
+    // 3️⃣ Calculate distance
+    const distance = getDistanceInMeters(
+      studentLat,
+      studentLng,
+      sessionLat,
+      sessionLng
+    );
+
+    // Block fake zero-distance scans
+    if (distance < 5 && accuracy > 30) {
+      throw {
+        status: 403,
+        msg: "Fake GPS detected. Move physically closer to the lecture."
+      };
+    }
+
+    // 4️⃣ Enforce geofence
+    if (distance > sessionRadius) {
+      throw {
+        status: 403,
+        msg: `You are outside the attendance zone (${Math.round(distance)}m)`
+      };
+    }
+
+    // Save normalized values back
+    location.lat = studentLat;
+    location.lng = studentLng;
+    location.accuracy = accuracy;
+
+  }
+
+  return true;
 }
+
+
+
 
 async function rotateQrToken(session) {
   const newToken = crypto.randomBytes(12).toString("hex");
@@ -157,7 +242,7 @@ async function expireSessions(io) {
 }
 
 // ======================= SET INTERVAL ======================= //
-const io = require("../index").io; 
+const io = require("../index").io;
 // Check every 10 seconds
 setInterval(() => expireSessions(io), 10 * 1000);
 
@@ -169,7 +254,7 @@ setInterval(() => expireSessions(io), 10 * 1000);
 // ======================= ROUTES ======================= //
 
 // Student checks if already marked
-router.get("/check", auth, roleCheck(["student"]), async (req, res) => {
+router.get("/check", auth, studentOnly(), async (req, res) => {
   const { sessionId } = req.query;
   const studentId = req.user.id;
   const exists = await Attendance.findOne({ session: sessionId, student: studentId });
@@ -194,7 +279,7 @@ router.get("/active/:courseId", auth, async (req, res) => {
 
 
 // Student scans QR
-router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
+router.post("/scan/:token", auth, studentOnly(), async (req, res) => {
   try {
     const { token } = req.params;
     const studentId = req.user.id;
@@ -230,7 +315,7 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
       session: session._id,
       sessionType: "QR",
       status: "Present",
-      date: new Date(),
+      date: session.createdAt,
       faceVerified: true,
       gpsLocation: location ? { lat: location.lat, lng: location.lng, accuracy: location.accuracy } : undefined
     });
@@ -248,9 +333,18 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
 
     res.status(201).json({ alreadyMarked: false, attendanceId: attendance._id, msg: "Attendance recorded" });
   } catch (err) {
-    console.error(err);
-    res.status(err.status || 500).json({ msg: err.msg || "Server error" });
+    console.error("[SCAN ERROR]", {
+      msg: err.msg,
+      status: err.status,
+      err
+    });
+
+    res.status(err.status || 500).json({
+      msg: err.msg || "Server error",
+      debug: err
+    });
   }
+
 });
 
 // ======================= CREATE SESSIONS ======================= //
@@ -261,7 +355,7 @@ router.post("/scan/:token", auth, roleCheck(["student"]), async (req, res) => {
 router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { type } = req.body; // "QR" | "MANUAL" | "ROLLCALL"
+    const { type, location } = req.body; // "QR" | "MANUAL" | "ROLLCALL"
 
     // ✅ normalize & protect session type
     const safeType = ["QR", "MANUAL", "ROLLCALL"].includes(type?.toUpperCase())
@@ -293,17 +387,28 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
     let expiresAt;
     switch (safeType) {
       case "QR":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes
+        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
         break;
       case "MANUAL":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 1 minute
+        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
         break;
       case "ROLLCALL":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes default
+        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
         break;
       default:
         expiresAt = new Date(Date.now() + 10 * 60 * 1000);
     }
+
+    if (!location || !location.lat || !location.lng) {
+      return res.status(400).json({ msg: "Lecture location is required" });
+    }
+
+    // ✅ Normalize and clamp radius safely
+    const radius = Math.min(
+      Math.max(Number(location?.radius) || 60, 10),
+      300
+    );
+
 
     // Create session
     const session = await Session.create({
@@ -314,8 +419,17 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       expiresAt,
       status: "active",
       validTokens: [],
-      type: safeType
+      type: safeType,
+
+      // ✅ LOCK LOCATION INTO SESSION
+      location: {
+        lat: Number(location.lat),
+        lng: Number(location.lng),
+        radius
+      }
+
     });
+
 
     console.log("[CREATE SESSION] Session created:", {
       sessionId: session._id.toString(),
@@ -382,7 +496,7 @@ router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) =>
 
 // ======================= STUDENT FACE DESCRIPTOR =======================
 
-router.get("/:token/student", auth, roleCheck(["student"]), async (req, res) => {
+router.get("/:token/student", auth, studentOnly(), async (req, res) => {
   const session = await Session.findOne({
     $or: [
       { token: req.params.token },
