@@ -53,8 +53,11 @@ router.get("/", auth, async (req, res) => {
                 matchStage.course = { $in: teacherCourseIds.map(id => mongoose.Types.ObjectId(id)) };
             }
         } else if (user.role === "student") {
-            const enrolledCourses = await Course.find({ students: user._id }).select("_id");
-            const enrolledCourseIds = enrolledCourses.map(c => c._id.toString());
+            const enrollments = await mongoose.model("Enrollment").find({
+                student: user._id
+            }).select("course");
+
+            const enrolledCourseIds = enrollments.map(e => e.course.toString());
 
             if (enrolledCourseIds.length === 0) {
                 return res.status(403).json({
@@ -78,7 +81,8 @@ router.get("/", auth, async (req, res) => {
             }
 
             matchStage.course = courseObjectId;
-        } else {
+        }
+        else {
             if (courseId) matchStage.course = courseObjectId;
         }
 
@@ -157,14 +161,35 @@ router.get("/", auth, async (req, res) => {
             },
         });
 
-        pipeline.push({ $sort: { attendancePercentage: -1, totalPresent: -1 } });
-
         const leaderboard = await Attendance.aggregate(pipeline);
 
-        leaderboard.forEach((row, idx) => {
-            row.rank = idx + 1;
+        // ✅ FINAL SORT (percentage → present → name)
+        leaderboard.sort((a, b) => {
+            if (b.attendancePercentage !== a.attendancePercentage) {
+                return b.attendancePercentage - a.attendancePercentage;
+            }
+            if (b.totalPresent !== a.totalPresent) {
+                return b.totalPresent - a.totalPresent;
+            }
+            return a.name.localeCompare(b.name);
+        });
+
+        // TRUE RANKING WITH TIES
+        let currentRank = 0;
+        let lastScore = null;
+
+        leaderboard.forEach((row, index) => {
+            const scoreKey = `${row.attendancePercentage}-${row.totalPresent}`;
+
+            if (scoreKey !== lastScore) {
+                currentRank = index + 1;
+                lastScore = scoreKey;
+            }
+
+            row.rank = currentRank;
             row.xp = (row.totalPresent || 0) * 10;
         });
+
 
         return res.json({ success: true, leaderboard });
     } catch (err) {
