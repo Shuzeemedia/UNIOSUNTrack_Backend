@@ -180,8 +180,10 @@ async function validateStudentForSession(studentId, session, location) {
       };
     }
 
+    const effectiveRadius = sessionRadius + accuracy;
+
     // 4️⃣ Enforce geofence
-    if (distance > sessionRadius) {
+    if (distance > effectiveRadius) {
       throw {
         status: 403,
         msg: `You are outside the attendance zone (${Math.round(distance)}m)`
