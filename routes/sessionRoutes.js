@@ -538,4 +538,3 @@ module.exports = router;
 module.exports.markAbsenteesForSession = markAbsenteesForSession;
 module.exports.endSession = endSession;
 module.exports.emitAttendanceUpdate = emitAttendanceUpdate;
-
