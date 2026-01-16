@@ -468,6 +468,8 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
 });
 
 
+
+
 // Teacher refresh QR
 router.post("/:sessionId/refresh", auth, roleCheck(["teacher"]), async (req, res) => {
   const session = await Session.findById(req.params.sessionId);
