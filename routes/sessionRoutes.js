@@ -180,7 +180,13 @@ async function validateStudentForSession(studentId, session, location) {
       };
     }
 
-    const effectiveRadius = sessionRadius + accuracy;
+    const studentAccuracy = accuracy;
+    const sessionAccuracy = Number(session.location.accuracy) || 50;
+
+    effectiveRadius =
+      sessionRadius +
+      Math.max(sessionAccuracy, studentAccuracy);
+
 
     // 4️⃣ Enforce geofence
     if (distance > effectiveRadius) {
@@ -400,8 +406,10 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       sessionData.location = {
         lat: Number(location.lat),
         lng: Number(location.lng),
-        radius
+        radius,
+        accuracy: Math.min(Number(location.accuracy) || 50, 100),
       };
+
     }
 
     const session = await Session.create(sessionData);
