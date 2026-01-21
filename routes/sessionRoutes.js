@@ -268,7 +268,6 @@ router.get("/active/:courseId", auth, async (req, res) => {
   const session = await Session.findOne({
     course: req.params.courseId,
     status: "active",
-    type: "QR", // ✅ IMPORTANT
     expiresAt: { $gt: new Date() }
   }).populate("course", "name code");
 
@@ -278,6 +277,7 @@ router.get("/active/:courseId", auth, async (req, res) => {
 
   res.json({ active: true, session });
 });
+
 
 
 // Student scans QR
@@ -357,9 +357,8 @@ router.post("/scan/:token", auth, studentOnly(), async (req, res) => {
 router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) => {
   try {
     const { courseId } = req.params;
-    const { type, location } = req.body; // "QR" | "MANUAL" | "ROLLCALL"
+    const { type, location, duration } = req.body;
 
-    // ✅ normalize & protect session type
     const safeType = ["QR", "MANUAL", "ROLLCALL"].includes(type?.toUpperCase())
       ? type.toUpperCase()
       : "MANUAL";
@@ -368,52 +367,19 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
     if (!course) return res.status(404).json({ msg: "Course not found" });
     if (course.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
 
-    const io = req.app.get("io"); // ✅ get socket instance
+    const io = req.app.get("io");
 
-    console.log("[CREATE SESSION] Creating session for course:", courseId, {
-      semester: course.semester,
-      type: safeType,
-      time: new Date().toISOString()
-    });
-
-    // Expire previous sessions properly with io
+    // Expire previous sessions
     const activeSessions = await Session.find({ course: courseId, status: "active" });
     for (const s of activeSessions) {
-      console.log("[CREATE SESSION] Ending previous active session:", s._id.toString());
-      await endSession(s, io); // ✅ io passed here
+      await endSession(s, io);
     }
 
-    const token = uuidv4(); // always generate
+    const token = uuidv4();
+    const safeDuration = Math.min(Math.max(Number(duration) || 10, 1), 180);
+    const expiresAt = new Date(Date.now() + safeDuration * 60 * 1000);
 
-    // Set expiresAt based on session type
-    let expiresAt;
-    switch (safeType) {
-      case "QR":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-        break;
-      case "MANUAL":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-        break;
-      case "ROLLCALL":
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-        break;
-      default:
-        expiresAt = new Date(Date.now() + 10 * 60 * 1000);
-    }
-
-    if (!location || !location.lat || !location.lng) {
-      return res.status(400).json({ msg: "Lecture location is required" });
-    }
-
-    // ✅ Normalize and clamp radius safely
-    const radius = Math.min(
-      Math.max(Number(location?.radius) || 60, 10),
-      300
-    );
-
-
-    // Create session
-    const session = await Session.create({
+    let sessionData = {
       course: courseId,
       teacher: req.user.id,
       semester: course.semester,
@@ -422,31 +388,31 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       status: "active",
       validTokens: [],
       type: safeType,
+    };
 
-      // ✅ LOCK LOCATION INTO SESSION
-      location: {
+    // ✅ Only attach location if session is QR
+    if (safeType === "QR") {
+      if (!location || !location.lat || !location.lng) {
+        return res.status(400).json({ msg: "Lecture location is required for QR sessions" });
+      }
+
+      const radius = Math.min(Math.max(Number(location?.radius) || 60, 10), 300);
+      sessionData.location = {
         lat: Number(location.lat),
         lng: Number(location.lng),
         radius
-      }
+      };
+    }
 
-    });
+    const session = await Session.create(sessionData);
 
-
-    console.log("[CREATE SESSION] Session created:", {
-      sessionId: session._id.toString(),
-      token,
-      expiresAt: expiresAt.toISOString()
-    });
-
-    // Generate QR code if QR session
+    // Generate QR only for QR sessions
     let qrImage = null;
     if (safeType === "QR") {
       const qrData = `${process.env.FRONTEND_URL}/student/scan/${token}`;
       qrImage = await QRCode.toDataURL(qrData);
     }
 
-    // Emit update to frontend for this course immediately
     emitAttendanceUpdate(io, {
       courseId: courseId.toString(),
       sessionId: session._id.toString(),
@@ -461,11 +427,16 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       sessionId: session._id,
       type: safeType
     });
+
   } catch (err) {
-    console.error("[CREATE SESSION ERROR]", err);
-    res.status(err.status || 500).json({ msg: err.msg || "Server error" });
+    console.error("[CREATE SESSION ERROR]", err.message, err);
+    res.status(500).json({
+      msg: err.message || "Server error",
+      error: err
+    });
   }
 });
+
 
 
 

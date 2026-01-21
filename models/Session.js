@@ -51,10 +51,24 @@ const sessionSchema = new mongoose.Schema({
   },
 
   location: {
-    lat: { type: Number, required: true },
-    lng: { type: Number, required: true },
-    radius: { type: Number, default: 60 }
+    lat: {
+      type: Number,
+      required: function () {
+        return this.type === "QR";
+      },
+    },
+    lng: {
+      type: Number,
+      required: function () {
+        return this.type === "QR";
+      },
+    },
+    radius: {
+      type: Number,
+      default: 60,
+    },
   },
+
 
 
   // Store the rotating QR tokens (each valid for ~10 seconds)
@@ -94,6 +108,13 @@ sessionSchema.methods.isTokenValid = function (token) {
     (t) => t.token === token && t.expiresAt > now
   );
 };
+
+sessionSchema.pre("save", function (next) {
+  if (this.type !== "QR") {
+    this.location = undefined;
+  }
+  next();
+});
 
 
 module.exports = mongoose.model("Session", sessionSchema);
