@@ -183,9 +183,11 @@ async function validateStudentForSession(studentId, session, location) {
     const studentAccuracy = accuracy;
     const sessionAccuracy = Number(session.location.accuracy) || 50;
 
-    effectiveRadius =
+
+    const effectiveRadius =
       sessionRadius +
       Math.max(sessionAccuracy, studentAccuracy);
+
 
 
     // 4️⃣ Enforce geofence
