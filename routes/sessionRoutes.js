@@ -408,7 +408,7 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
       }
 
       // 🔒 HARD BACKEND GPS QUALITY CHECK (LECTURER)
-      if (!Number.isFinite(Number(location.accuracy)) || Number(location.accuracy) > 50) {
+      if (!Number.isFinite(Number(location.accuracy)) || Number(location.accuracy) > 100) {
         return res.status(400).json({
           msg: "Lecturer GPS too inaccurate. Move outdoors."
         });
