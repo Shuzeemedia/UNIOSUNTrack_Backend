@@ -185,7 +185,7 @@ async function validateStudentForSession(studentId, session, location) {
 
 
     const effectiveRadius =
-  sessionRadius + Math.min(accuracy, 30);
+      sessionRadius + Math.min(accuracy, 30);
 
 
 
@@ -407,12 +407,21 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
         });
       }
 
-      // 🔒 HARD BACKEND GPS QUALITY CHECK (LECTURER)
-      if (!Number.isFinite(Number(location.accuracy)) || Number(location.accuracy) > 100) {
+      // ✅ Normalize lecturer GPS (DO NOT BLOCK)
+      const lecturerAccuracy = Number(location.accuracy);
+
+      if (!Number.isFinite(lecturerAccuracy)) {
         return res.status(400).json({
-          msg: "Lecturer GPS too inaccurate. Move outdoors."
+          msg: "Invalid GPS data received"
         });
       }
+
+      // Clamp accuracy instead of rejecting
+      const normalizedAccuracy = Math.min(
+        Math.max(lecturerAccuracy, 10),
+        120
+      );
+
 
       const radius = Math.min(
         Math.max(Number(location.radius) || 60, 10),
@@ -423,8 +432,9 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
         lat: Number(location.lat),
         lng: Number(location.lng),
         radius,
-        accuracy: Math.min(Number(location.accuracy), 50),
+        accuracy: normalizedAccuracy,
       };
+
     }
 
 
