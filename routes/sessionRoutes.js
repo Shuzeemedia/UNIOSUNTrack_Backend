@@ -180,13 +180,14 @@ async function validateStudentForSession(studentId, session, location) {
       };
     }
 
-    const studentAccuracy = accuracy;
-    const sessionAccuracy = Number(session.location.accuracy) || 50;
+    // const studentAccuracy = accuracy;
+    // const sessionAccuracy = Number(session.location.accuracy) || 50;
 
 
     const effectiveRadius =
-      sessionRadius +
-      Math.max(sessionAccuracy, studentAccuracy);
+  sessionRadius + Math.min(accuracy, 30);
+
+
 
 
 
@@ -401,18 +402,31 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
     // ✅ Only attach location if session is QR
     if (safeType === "QR") {
       if (!location || !location.lat || !location.lng) {
-        return res.status(400).json({ msg: "Lecture location is required for QR sessions" });
+        return res.status(400).json({
+          msg: "Lecture location is required for QR sessions"
+        });
       }
 
-      const radius = Math.min(Math.max(Number(location?.radius) || 60, 10), 300);
+      // 🔒 HARD BACKEND GPS QUALITY CHECK (LECTURER)
+      if (!Number.isFinite(Number(location.accuracy)) || Number(location.accuracy) > 50) {
+        return res.status(400).json({
+          msg: "Lecturer GPS too inaccurate. Move outdoors."
+        });
+      }
+
+      const radius = Math.min(
+        Math.max(Number(location.radius) || 60, 10),
+        300
+      );
+
       sessionData.location = {
         lat: Number(location.lat),
         lng: Number(location.lng),
         radius,
-        accuracy: Math.min(Number(location.accuracy) || 50, 100),
+        accuracy: Math.min(Number(location.accuracy), 50),
       };
-
     }
+
 
     const session = await Session.create(sessionData);
 

@@ -67,6 +67,11 @@ const sessionSchema = new mongoose.Schema({
       type: Number,
       default: 60,
     },
+    accuracy: {
+      type: Number,
+      default: 50,
+    },
+        
   },
 
 
