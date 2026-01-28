@@ -164,8 +164,13 @@ async function validateStudentForSession(studentId, session, location) {
       throw { status: 500, msg: "Session location corrupted" };
     }
 
+    
+    // const studentAccuracy = accuracy;
+    // const sessionAccuracy = Number(session.location.accuracy) || 50;
+
+
     // 3️⃣ Calculate distance
-    const distance = getDistanceInMeters(
+    const dist = getDistanceInMeters(
       studentLat,
       studentLng,
       sessionLat,
@@ -173,31 +178,31 @@ async function validateStudentForSession(studentId, session, location) {
     );
 
     // Block fake zero-distance scans
-    if (distance < 5 && accuracy > 30) {
+    if (dist < 5 && accuracy > 30) {
       throw {
         status: 403,
         msg: "Fake GPS detected. Move physically closer to the lecture."
       };
     }
 
-    // const studentAccuracy = accuracy;
-    // const sessionAccuracy = Number(session.location.accuracy) || 50;
-
-
-    const effectiveRadius =
-      sessionRadius + Math.min(accuracy, 30);
-
-
-
-
+    // 🔵 Accuracy-aware geofence
+    const allowedDistance =
+      session.location.radius +
+      Math.max(
+        accuracy, // student accuracy
+        Number(session.location.accuracy) || 50 // lecturer accuracy
+      );
 
     // 4️⃣ Enforce geofence
-    if (distance > effectiveRadius) {
+    if (dist > allowedDistance) {
       throw {
         status: 403,
-        msg: `You are outside the attendance zone (${Math.round(distance)}m)`
+        msg: "Outside attendance zone (GPS accuracy considered)",
+        dist: Math.round(dist),
+        allowedDistance: Math.round(allowedDistance)
       };
     }
+
 
     // Save normalized values back
     location.lat = studentLat;

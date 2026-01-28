@@ -7,6 +7,10 @@ const Department = require("../models/Department");
 const { auth, roleCheck } = require("../middleware/authMiddleware");
 const { Resend } = require("resend"); // ✅ Using Resend globally
 
+const { generateRegistrationOptions, verifyRegistrationResponse } = require("@simplewebauthn/server");
+const { generateAuthenticationOptions, verifyAuthenticationResponse } = require("@simplewebauthn/server");
+const base64url = require("base64url");
+
 const resend = new Resend(process.env.RESEND_API_KEY);
 const router = express.Router();
 
@@ -260,6 +264,139 @@ router.post("/enroll-face", auth, async (req, res) => {
     } catch (err) {
         console.error("Enroll face error:", err);
         return res.status(500).json({ msg: "Face enrollment failed. Try again." });
+    }
+});
+
+// ======================
+// 🖐 Fingerprint / WebAuthn Routes
+// ======================
+
+// 1️⃣ Generate Registration Options (Enroll fingerprint)
+router.post("/webauthn/register-options", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: "User not found" });
+
+        const options = generateRegistrationOptions({
+            rpName: "UNIOSUNTrack",
+            rpID: process.env.RP_ID,
+            userID: user._id.toString(),
+            userName: user.email,
+            attestationType: "indirect",
+            authenticatorSelection: {
+                userVerification: "required",
+                residentKey: "discouraged",
+            },
+            excludeCredentials: user.authenticator ? [
+                {
+                    id: user.authenticator.credID,
+                    type: "public-key",
+                },
+            ] : [],
+        });
+
+        user.currentChallenge = options.challenge;
+        await user.save();
+
+        res.json(options);
+    } catch (err) {
+        console.error("WebAuthn register-options error:", err);
+        res.status(500).json({ msg: "Failed to generate registration options" });
+    }
+});
+
+// 2️⃣ Verify Registration Response
+router.post("/webauthn/register-response", auth, async (req, res) => {
+    try {
+        const user = await User.findById(req.user.id);
+        if (!user) return res.status(404).json({ msg: "User not found" });
+
+        const verification = await verifyRegistrationResponse({
+            credential: req.body,
+            expectedChallenge: user.currentChallenge,
+            expectedOrigin: process.env.FRONTEND_URL,
+            expectedRPID: process.env.RP_ID,
+        });
+
+        if (verification.verified) {
+            user.authenticator = {
+                credID: base64url.toBuffer(verification.registrationInfo.credentialID),
+                publicKey: verification.registrationInfo.credentialPublicKey,
+                counter: verification.registrationInfo.counter,
+            };
+            user.currentChallenge = undefined;
+            await user.save();
+
+            return res.json({ ok: true, msg: "Fingerprint enrolled successfully" });
+        }
+
+        res.status(400).json({ ok: false, msg: "Fingerprint registration failed" });
+    } catch (err) {
+        console.error("WebAuthn register-response error:", err);
+        res.status(500).json({ msg: "Error verifying fingerprint registration" });
+    }
+});
+
+// 3️⃣ Generate Authentication Options (Login)
+router.post("/webauthn/auth-options", async (req, res) => {
+    try {
+        const user = await User.findOne({ email: req.body.email });
+        if (!user || !user.authenticator?.credID)
+            return res.status(400).json({ msg: "No fingerprint enrolled" });
+
+        const options = generateAuthenticationOptions({
+            allowCredentials: [
+                {
+                    id: user.authenticator.credID,
+                    type: "public-key",
+                },
+            ],
+            userVerification: "required",
+        });
+
+        user.currentChallenge = options.challenge;
+        await user.save();
+
+        res.json(options);
+    } catch (err) {
+        console.error("WebAuthn auth-options error:", err);
+        res.status(500).json({ msg: "Could not generate authentication options" });
+    }
+});
+
+// 4️⃣ Verify Authentication Response (Login)
+router.post("/webauthn/auth-response", async (req, res) => {
+    try {
+        const user = await User.findOne({ email: req.body.email });
+        if (!user || !user.authenticator?.credID)
+            return res.status(400).json({ msg: "No fingerprint enrolled" });
+
+        const verification = await verifyAuthenticationResponse({
+            credential: req.body,
+            expectedChallenge: user.currentChallenge,
+            expectedOrigin: process.env.FRONTEND_URL,
+            expectedRPID: process.env.RP_ID,
+            authenticator: user.authenticator,
+        });
+
+        if (verification.verified) {
+            user.authenticator.counter = verification.authenticationInfo.newCounter;
+            await user.save();
+
+            // Generate JWT
+            const token = jwt.sign(
+                { id: user._id, role: user.role },
+                process.env.JWT_SECRET,
+                { expiresIn: "1d" }
+            );
+
+            return res.json({ ok: true, token, user });
+        }
+
+        res.status(401).json({ ok: false, msg: "Fingerprint authentication failed" });
+    } catch (err) {
+        console.error("WebAuthn auth-response error:", err);
+        res.status(500).json({ msg: "Error verifying fingerprint authentication" });
     }
 });
 

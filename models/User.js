@@ -12,7 +12,7 @@ const UserSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    
+
     graduationDate: {
       type: Date,
     },
@@ -21,8 +21,8 @@ const UserSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
     },
-    
-    
+
+
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     role: {
@@ -43,7 +43,14 @@ const UserSchema = new mongoose.Schema(
 
     gpsAllowed: { type: Boolean, default: false },
     faceImage: { type: String }, // path to stored face image
-    faceDescriptor: { type: [Number], default: [] }, // ✅ ADD THIS
+    faceDescriptor: { type: [Number], default: [] },
+
+    authenticator: {
+      credID: { type: String },       // Credential ID (base64)
+      publicKey: { type: String },    // Public key
+      counter: { type: Number },      // Signature counter
+    },
+
   },
   { timestamps: true }
 );
