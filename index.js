@@ -143,5 +143,6 @@ mongoose
 
   .catch((err) => console.error("❌ DB Connection Error:", err));
 
-startAutoExpireLoop();
+startAutoExpireLoop(io);
+
 

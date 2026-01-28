@@ -1,12 +1,11 @@
 const Session = require("../models/Session");
 const { endSession } = require("../helpers/sessionHelpers");
 
-async function expireSessions() {
+async function expireSessions(io) {
     const now = new Date();
     console.log("⏰ Checking for expired sessions at", now.toISOString());
 
     try {
-        // 1️⃣ Find active sessions that should expire
         const sessions = await Session.find({
             status: "active",
             expiresAt: { $lte: now }
@@ -22,10 +21,18 @@ async function expireSessions() {
 
         console.log("📌 Expired sessions found:", sessions.map(s => s._id));
 
-        // 2️⃣ End each session safely
         for (const session of sessions) {
             try {
-                await endSession(session); // our safe endSession from earlier
+                await endSession(session);
+
+                // 🔔 REALTIME UPDATE
+                if (io && session.course?._id) {
+                    io.to(session.course._id.toString()).emit("session-ended", {
+                        sessionId: session._id,
+                        courseId: session.course._id
+                    });
+                }
+
             } catch (err) {
                 console.error(`❌ Failed to end session ${session._id}:`, err.message || err);
             }
@@ -35,9 +42,9 @@ async function expireSessions() {
     }
 }
 
-function startAutoExpireLoop(intervalMs = 60 * 1000) {
-    expireSessions(); // run immediately
-    setInterval(expireSessions, intervalMs);
+function startAutoExpireLoop(io, intervalMs = 60 * 1000) {
+    expireSessions(io); // run immediately
+    setInterval(() => expireSessions(io), intervalMs);
 }
 
 module.exports = { startAutoExpireLoop };

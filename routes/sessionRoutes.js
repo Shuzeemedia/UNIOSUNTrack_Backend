@@ -164,7 +164,7 @@ async function validateStudentForSession(studentId, session, location) {
       throw { status: 500, msg: "Session location corrupted" };
     }
 
-    
+
     // const studentAccuracy = accuracy;
     // const sessionAccuracy = Number(session.location.accuracy) || 50;
 
@@ -224,45 +224,50 @@ async function rotateQrToken(session) {
   return newToken;
 }
 
-// Auto-expire active sessions
-// ======================= AUTO-EXPIRE SESSIONS ======================= //
-
-async function expireSessions(io) {
-  try {
-    const now = new Date();
-
-    // Find all active sessions that have truly expired
-    const sessionsToExpire = await Session.find({
-      status: "active",
-      expiresAt: { $lte: now }
-    });
-
-    if (!sessionsToExpire.length) {
-      console.log(`[EXPIRE SESSIONS] No sessions to expire at ${now.toISOString()}`);
-      return;
-    }
-
-    console.log(`[EXPIRE SESSIONS] Found ${sessionsToExpire.length} session(s) to expire at ${now.toISOString()}`);
-
-    for (const session of sessionsToExpire) {
-      console.log(`[EXPIRE SESSIONS] Auto-expiring session: ${session._id.toString()} | Type: ${session.type}`);
-      try {
-        await endSession(session, io); // ✅ io passed
-      } catch (err) {
-        console.error(`[EXPIRE SESSIONS ERROR] Failed to expire session ${session._id.toString()}`, err);
-      }
-    }
-  } catch (err) {
-    console.error("[EXPIRE SESSIONS ERROR]", err);
-  }
-}
 
 // ======================= SET INTERVAL ======================= //
-const io = require("../index").io;
-// Check every 10 seconds
-setInterval(() => expireSessions(io), 10 * 1000);
+
+router.post("/:sessionId/location", auth, roleCheck(["teacher"]), async (req, res) => {
+  const { lat, lng, accuracy } = req.body;
+
+  // Validate coordinates
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+    return res.status(400).json({ msg: "Invalid GPS coordinates" });
+  }
+
+  const lecturerAccuracy = Number(accuracy);
+  if (!Number.isFinite(lecturerAccuracy)) {
+    return res.status(400).json({ msg: "GPS accuracy missing" });
+  }
+
+  // Reject extremely weak GPS (network/IP-based)
+  if (lecturerAccuracy > 500) {
+    return res.status(400).json({
+      msg: "GPS signal too weak. Enable precise location."
+    });
+  }
+
+  const session = await Session.findById(req.params.sessionId);
+  if (!session || session.status !== "active") {
+    return res.status(404).json({ msg: "Session not active" });
+  }
+
+  // Normalize accuracy (IMPORTANT)
+  const normalizedAccuracy = Math.min(
+    Math.max(lecturerAccuracy, 10),
+    120
+  );
+
+  if (!session.location) session.location = {};
+  session.location.lat = Number(lat);
+  session.location.lng = Number(lng);
+  session.location.accuracy = normalizedAccuracy;
 
 
+  await session.save();
+
+  res.json({ msg: "Session location updated" });
+});
 
 
 
@@ -412,20 +417,17 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
         });
       }
 
-      // ✅ Normalize lecturer GPS (DO NOT BLOCK)
       const lecturerAccuracy = Number(location.accuracy);
 
       if (!Number.isFinite(lecturerAccuracy)) {
-        return res.status(400).json({
-          msg: "Invalid GPS data received"
-        });
+        return res.status(400).json({ msg: "Invalid GPS data received" });
       }
 
-      // Clamp accuracy instead of rejecting
       const normalizedAccuracy = Math.min(
         Math.max(lecturerAccuracy, 10),
         120
       );
+
 
 
       const radius = Math.min(
