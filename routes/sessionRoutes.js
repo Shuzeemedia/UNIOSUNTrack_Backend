@@ -411,7 +411,7 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
 
     // ✅ Only attach location if session is QR
     if (safeType === "QR") {
-      if (!location || !location.lat || !location.lng) {
+      if (!location ||!Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lng))) {
         return res.status(400).json({
           msg: "Lecture location is required for QR sessions"
         });
