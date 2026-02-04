@@ -541,7 +541,10 @@ router.post("/:sessionId/refresh", auth, roleCheck(["teacher"]), async (req, res
 router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) => {
   const session = await Session.findById(req.params.sessionId);
   if (!session) return res.status(404).json({ msg: "Session not found" });
-  if (session.teacher.toString() !== req.user.id) return res.status(403).json({ msg: "Not authorized" });
+  if (!session.teacher || session.teacher.toString() !== req.user.id) {
+    return res.status(403).json({ msg: "Not authorized" });
+  }
+  
 
   const io = req.app.get("io"); // ✅ get socket instance
   await endSession(session, io);
@@ -558,6 +561,11 @@ router.post("/:sessionId/cancel", auth, roleCheck(["teacher"]), async (req, res)
     if (!session) {
       return res.status(404).json({ msg: "Session not found" });
     }
+
+    if (session.constructor.modelName !== "Session") {
+      throw new Error("Invalid model used in attendance cancel");
+    }
+    
 
     if (session.teacher.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Not authorized" });
