@@ -353,7 +353,7 @@ router.post("/scan/:token", auth, studentOnly(), async (req, res) => {
         msg: "This session is no longer active"
       });
     }
-    
+
 
     if (session.type !== "QR") {
       return res.status(400).json({
@@ -544,7 +544,7 @@ router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) =>
   if (!session.teacher || session.teacher.toString() !== req.user.id) {
     return res.status(403).json({ msg: "Not authorized" });
   }
-  
+
 
   const io = req.app.get("io"); // ✅ get socket instance
   await endSession(session, io);
@@ -565,7 +565,7 @@ router.post("/:sessionId/cancel", auth, roleCheck(["teacher"]), async (req, res)
     if (session.constructor.modelName !== "Session") {
       throw new Error("Invalid model used in attendance cancel");
     }
-    
+
 
     if (session.teacher.toString() !== req.user.id) {
       return res.status(403).json({ msg: "Not authorized" });
@@ -588,9 +588,18 @@ router.post("/:sessionId/cancel", auth, roleCheck(["teacher"]), async (req, res)
       msg: "Session cancelled successfully. No attendance was recorded."
     });
   } catch (err) {
-    console.error("[CANCEL SESSION ERROR]", err);
-    res.status(500).json({ msg: "Server error" });
+    console.error("[CANCEL SESSION ERROR]", {
+      message: err.message,
+      stack: err.stack,
+      err
+    });
+
+    res.status(err.status || 500).json({
+      msg: err.message || "Server error",
+      debug: process.env.NODE_ENV === "development" ? err : undefined
+    });
   }
+
 });
 
 
