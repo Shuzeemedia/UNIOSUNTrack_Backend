@@ -35,11 +35,19 @@ async function validateSessionCourse(sessionId, courseId) {
 
   const session = await Session.findById(sessionId);
   if (!session) throw { status: 400, msg: "Invalid session" };
-  if (session.course.toString() !== courseId) throw { status: 400, msg: "Session does not belong to this course" };
-  if (session.status === "expired") throw { status: 400, msg: "Session has already ended" };
+
+  if (session.course.toString() !== courseId)
+    throw { status: 400, msg: "Session does not belong to this course" };
+
+  if (session.status === "expired")
+    throw { status: 400, msg: "Session has expired" };
+
+  if (session.status === "cancelled")
+    throw { status: 400, msg: "Attendance session was cancelled by the lecturer" };
 
   return session;
 }
+
 
 // Build a date range filter for MongoDB
 function buildDateRangeFilter({ date, range, filter }) {

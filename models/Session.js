@@ -46,9 +46,19 @@ const sessionSchema = new mongoose.Schema({
 
   status: {
     type: String,
-    enum: ["active", "expired"],
+    enum: ["active", "expired", "cancelled"],
     default: "active",
   },
+
+  cancelledAt: {
+    type: Date,
+  },
+
+  cancelReason: {
+    type: String,
+    trim: true,
+  },
+
 
   location: {
     lat: {
@@ -71,7 +81,7 @@ const sessionSchema = new mongoose.Schema({
       type: Number,
       default: 50,
     },
-        
+
   },
 
 

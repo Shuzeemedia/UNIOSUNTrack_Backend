@@ -108,6 +108,39 @@ async function endSession(session, io) {
   console.log("[END SESSION DONE]", session._id.toString());
 }
 
+async function cancelSession(session, io, reason = "") {
+  console.log("[CANCEL SESSION START]", {
+    sessionId: session._id.toString(),
+    status: session.status,
+    time: new Date().toISOString()
+  });
+
+  const fresh = await Session.findById(session._id);
+  if (!fresh || fresh.status !== "active") {
+    console.log("[CANCEL SESSION ABORTED] Not active");
+    return;
+  }
+
+  // 1️⃣ Mark session as cancelled
+  fresh.status = "cancelled";
+  fresh.cancelledAt = new Date();
+  if (reason) fresh.cancelReason = reason;
+  fresh.expiresAt = new Date();
+
+  await fresh.save();
+
+  // 2️⃣ Remove any attendance already recorded
+  await Attendance.deleteMany({ session: fresh._id });
+
+  // 3️⃣ Notify via socket
+  emitAttendanceUpdate(io, {
+    courseId: fresh.course.toString(),
+    sessionId: fresh._id.toString(),
+    source: "session-cancelled"
+  });
+
+  console.log("[CANCEL SESSION DONE]", fresh._id.toString());
+}
 
 
 
@@ -315,6 +348,13 @@ router.post("/scan/:token", auth, studentOnly(), async (req, res) => {
     }).populate("course");
     if (!session) return res.status(404).json({ msg: "Invalid or expired QR code" });
 
+    if (session.status !== "active") {
+      return res.status(400).json({
+        msg: "This session is no longer active"
+      });
+    }
+    
+
     if (session.type !== "QR") {
       return res.status(400).json({
         msg: "This session does not support QR attendance"
@@ -411,7 +451,7 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
 
     // ✅ Only attach location if session is QR
     if (safeType === "QR") {
-      if (!location ||!Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lng))) {
+      if (!location || !Number.isFinite(Number(location.lat)) || !Number.isFinite(Number(location.lng))) {
         return res.status(400).json({
           msg: "Lecture location is required for QR sessions"
         });
@@ -510,6 +550,42 @@ router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) =>
 });
 
 
+// Teacher cancels a session (NO attendance recorded)
+router.post("/:sessionId/cancel", auth, roleCheck(["teacher"]), async (req, res) => {
+  try {
+    const session = await Session.findById(req.params.sessionId);
+
+    if (!session) {
+      return res.status(404).json({ msg: "Session not found" });
+    }
+
+    if (session.teacher.toString() !== req.user.id) {
+      return res.status(403).json({ msg: "Not authorized" });
+    }
+
+    if (session.status !== "active") {
+      return res.status(400).json({
+        msg: "Only active sessions can be cancelled"
+      });
+    }
+
+    const io = req.app.get("io");
+
+    // Optional reason from frontend
+    const { reason } = req.body;
+
+    await cancelSession(session, io, reason);
+
+    res.json({
+      msg: "Session cancelled successfully. No attendance was recorded."
+    });
+  } catch (err) {
+    console.error("[CANCEL SESSION ERROR]", err);
+    res.status(500).json({ msg: "Server error" });
+  }
+});
+
+
 // ======================= STUDENT FACE DESCRIPTOR =======================
 
 router.get("/:token/student", auth, studentOnly(), async (req, res) => {
@@ -553,4 +629,5 @@ router.get("/:token", auth, async (req, res) => {
 module.exports = router;
 module.exports.markAbsenteesForSession = markAbsenteesForSession;
 module.exports.endSession = endSession;
+module.exports.cancelSession = cancelSession;
 module.exports.emitAttendanceUpdate = emitAttendanceUpdate;
