@@ -580,7 +580,8 @@ router.post("/:sessionId/cancel", auth, roleCheck(["teacher"]), async (req, res)
     const io = req.app.get("io");
 
     // Optional reason from frontend
-    const { reason } = req.body;
+    const reason = req.body?.reason || "Session cancelled";
+
 
     await cancelSession(session, io, reason);
 
