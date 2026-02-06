@@ -134,10 +134,17 @@ mongoose
         console.log(`📤 Socket ${socket.id} left course ${courseId}`);
       });
 
+      // ===== NEW =====
+      socket.on("lecturer-location-update", ({ sessionId, location }) => {
+        // broadcast to all students in the session/course
+        io.to(sessionId).emit("student-receive-location", location);
+      });
+
       socket.on("disconnect", () => {
         console.log("❌ Socket disconnected:", socket.id);
       });
     });
+
 
   })
 
