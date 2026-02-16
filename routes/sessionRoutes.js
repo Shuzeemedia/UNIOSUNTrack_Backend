@@ -539,29 +539,18 @@ router.post("/:sessionId/refresh", auth, roleCheck(["teacher"]), async (req, res
 
 // Teacher manually end session
 router.post("/:sessionId/end", auth, roleCheck(["teacher"]), async (req, res) => {
-
   const session = await Session.findById(req.params.sessionId);
-
-  if (!session || session.status !== "active") {
-    return res.status(400).json({
-      msg: "Session already ended"
-    });
+  if (!session) return res.status(404).json({ msg: "Session not found" });
+  if (!session.teacher || session.teacher.toString() !== req.user.id) {
+    return res.status(403).json({ msg: "Not authorized" });
   }
 
-  session.status = "ended"; // ✅ FIX HERE
-  session.endedAt = new Date();
-  session.expiresAt = new Date();
 
-  await session.save();
+  const io = req.app.get("io"); // ✅ get socket instance
+  await endSession(session, io);
 
-  await markAbsenteesForSession(session);
-
-  res.json({
-    msg: "Session ended successfully"
-  });
-
+  res.json({ msg: "Session ended manually. Absentees marked." });
 });
-
 
 
 // Teacher cancels a session (NO attendance recorded)
