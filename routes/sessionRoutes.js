@@ -47,31 +47,28 @@ async function markAbsenteesForSession(session) {
   const enrollments = await Enrollment.find({ course: session.course })
     .select("student semester");
 
-  // 2️⃣ Get students already marked (Present or Absent)
-  const alreadyMarked = await Attendance.find({
-    session: session._id
-  }).select("student");
+  if (!enrollments.length) return;
 
-  const markedStudentIds = new Set(
-    alreadyMarked.map(a => a.student.toString())
-  );
+  // 2️⃣ Prepare bulk upsert ops
+  const bulkOps = enrollments.map(e => ({
+    updateOne: {
+      filter: { session: session._id, student: e.student }, // unique per session+student
+      update: {
+        $setOnInsert: {
+          course: session.course,
+          semester: e.semester,
+          session: session._id,
+          sessionType: session.type,
+          status: "Absent",
+          date: session.createdAt
+        }
+      },
+      upsert: true
+    }
+  }));
 
-  // 3️⃣ Build absent records ONLY for unmarked students
-  const absentees = enrollments
-    .filter(e => !markedStudentIds.has(e.student.toString()))
-    .map(e => ({
-      course: session.course,
-      student: e.student,
-      semester: e.semester,
-      session: session._id,
-      sessionType: session.type,
-      status: "Absent",
-      date: session.createdAt,
-    }));
-
-  // 4️⃣ Insert absentees
-  if (absentees.length > 0) {
-    await Attendance.insertMany(absentees);
+  if (bulkOps.length) {
+    await Attendance.bulkWrite(bulkOps);
   }
 }
 
