@@ -145,11 +145,11 @@ mongoose
       });
     });
 
+    startAutoExpireLoop(io);
 
   })
 
   .catch((err) => console.error("❌ DB Connection Error:", err));
 
-startAutoExpireLoop(io);
 
 
