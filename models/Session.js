@@ -84,6 +84,9 @@ const sessionSchema = new mongoose.Schema({
 
   },
 
+  locationLockedAt: {
+    type: Date,
+  },
 
 
   // Store the rotating QR tokens (each valid for ~10 seconds)
@@ -130,6 +133,24 @@ sessionSchema.pre("save", function (next) {
   }
   next();
 });
+
+sessionSchema.pre("save", function (next) {
+  if (
+    this.locationLockedAt &&
+    !this.isNew &&
+    (
+      this.isModified("location.lat") ||
+      this.isModified("location.lng") ||
+      this.isModified("location.radius") ||
+      this.isModified("location.accuracy")
+    )
+  ) {
+    return next(new Error("Session location is immutable"));
+  }
+  next();
+});
+
+
 
 
 module.exports = mongoose.model("Session", sessionSchema);

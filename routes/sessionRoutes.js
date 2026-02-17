@@ -258,46 +258,11 @@ async function rotateQrToken(session) {
 // ======================= SET INTERVAL ======================= //
 
 router.post("/:sessionId/location", auth, roleCheck(["teacher"]), async (req, res) => {
-  const { lat, lng, accuracy } = req.body;
-
-  // Validate coordinates
-  if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-    return res.status(400).json({ msg: "Invalid GPS coordinates" });
-  }
-
-  const lecturerAccuracy = Number(accuracy);
-  if (!Number.isFinite(lecturerAccuracy)) {
-    return res.status(400).json({ msg: "GPS accuracy missing" });
-  }
-
-  // Reject extremely weak GPS (network/IP-based)
-  if (lecturerAccuracy > 500) {
-    return res.status(400).json({
-      msg: "GPS signal too weak. Enable precise location."
-    });
-  }
-
-  const session = await Session.findById(req.params.sessionId);
-  if (!session || session.status !== "active") {
-    return res.status(404).json({ msg: "Session not active" });
-  }
-
-  // Normalize accuracy (IMPORTANT)
-  const normalizedAccuracy = Math.min(
-    Math.max(lecturerAccuracy, 10),
-    120
-  );
-
-  if (!session.location) session.location = {};
-  session.location.lat = Number(lat);
-  session.location.lng = Number(lng);
-  session.location.accuracy = normalizedAccuracy;
-
-
-  await session.save();
-
-  res.json({ msg: "Session location updated" });
+  return res.status(410).json({
+    msg: "Session location is immutable and cannot be updated"
+  });
 });
+
 
 
 
@@ -478,6 +443,9 @@ router.post("/:courseId/create", auth, roleCheck(["teacher"]), async (req, res) 
         radius,
         accuracy: normalizedAccuracy,
       };
+
+      sessionData.locationLockedAt = new Date();
+
 
     }
 
