@@ -145,7 +145,8 @@ mongoose
       });
     });
 
-    startAutoExpireLoop(io);
+    startAutoExpireLoop(io, 15 * 1000); // every 15 seconds
+
 
   })
 

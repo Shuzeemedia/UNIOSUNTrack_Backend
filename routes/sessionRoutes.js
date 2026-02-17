@@ -84,15 +84,24 @@ async function endSession(session, io) {
     caller: new Error().stack.split("\n")[2].trim()
   });
 
-  const fresh = await Session.findById(session._id);
-  if (!fresh || fresh.status === "expired") {
-    console.log("[END SESSION ABORTED] Already expired", session._id.toString());
+  const fresh = await Session.findOneAndUpdate(
+    {
+      _id: session._id,
+      status: "active"   // 👈 ONLY expire once
+    },
+    {
+      $set: {
+        status: "expired",
+        expiresAt: new Date()
+      }
+    },
+    { new: true }
+  );
+
+  if (!fresh) {
+    console.log("[END SESSION SKIPPED] Already expired", session._id.toString());
     return;
   }
-
-  fresh.status = "expired";
-  fresh.expiresAt = new Date();
-  await fresh.save();
 
   await markAbsenteesForSession(fresh);
 
@@ -102,7 +111,7 @@ async function endSession(session, io) {
     source: "auto-expire"
   });
 
-  console.log("[END SESSION DONE]", session._id.toString());
+  console.log("[END SESSION DONE]", fresh._id.toString());
 }
 
 async function cancelSession(session, io, reason = "") {
